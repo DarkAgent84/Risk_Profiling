@@ -1,9 +1,9 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Output temporary files and IDE
 .vscode/
 .idea/
 *.log
+.env
+data/raw/*.csv
+data/processed/*.csv
