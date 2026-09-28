@@ -117,31 +117,21 @@ in output. All loans go through the same rule:
    decided — changing a cutoff in `config.py` immediately changes output,
    with no hardcoded label anywhere else to keep in sync.
 
-## Removing customer_type from existing PostgreSQL data
+## Bounce_Type (one column — a label only, it does not change the risk score)
 
-If you already uploaded data before this change, drop the column from the
-live table (this doesn't touch any other column or row):
+`customer_type` is removed everywhere. Its replacement is a single `bounce_type` column,
+computed in `src/bounce.py`. A loan can qualify for several labels, so they are applied in
+this priority order and the first match wins:
 
-```bash
-python main.py db-drop-column --table raw_soa_master --column customer_type
-```
+| Priority | `bounce_type` | Rule |
+|---|---|---|
+| 1 | `Never Bounced` | 0 bounces |
+| 2 | `Always Bounced` | bounce rate >= 60% of the loan's MIS receipts |
+| 3 | `3 MOB` / `4 MOB` / `5 MOB` / `6 MOB` / `7+ MOB` | bounced (1+), rate under 60%, and months on books falls in that bucket |
+| 4 | `Ever Bounced` | 1+ bounces that match none of the above (loan under 3 months old, or no disbursal date) |
 
-Going forward, `python main.py sync-db` also strips `customer_type` from
-the SOA file automatically before uploading, so it won't reappear on the
-next sync even if your source CSV still has it.
-
-All tunable numbers — DPD cap, behavioral-friction weights, NPA floor,
-tier cutoffs — live in `config.py` and nowhere else.
-
-## Fixes vs. the previous version
-
-- `evaluate` no longer crashes when the SOA file has no `Risk Type` column
-  (accuracy metrics are skipped with a message instead).
-- Removed the unused `typing.Optional` import bug that broke the database
-  pipeline on import.
-- `config.py` weights, thresholds, and cutoffs are now actually read by the
-  scoring logic — previously several (weights, tier cutoffs, NPA floor)
-  were defined but silently ignored.
-- No hardcoded DB password; credentials come from environment variables.
-- Collapsed the bridge files (`run.py`, `compare.py`, `pipeline.py`, root
-  `config.py`, `db_config.py`) into one entrypoint and one config file.
+- **MOB** = whole months from `Disbursal Date` to the report date (`Cycle Date`; today if missing).
+- **A bounce** = an MIS receipt whose instrument status contains reject / bounce / disapprov / fail.
+- Thresholds live in `config.py` (`ALWAYS_BOUNCED_RATE`, `MOB_MIN`, `MOB_TOP`); to change the priority
+  order, edit the four marked lines in `add_bounce_type()`.
+- A loan with no MIS rows shows as `Never Bounced`; check `never_worked` to tell "no bounces" from "no data".

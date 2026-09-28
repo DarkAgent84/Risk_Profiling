@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 import config
+from src.bounce import add_bounce_type
 
 ESCALATED_BUCKETS = {"30-59", "60-89", "90+"} | config.EARLY_BUCKET_ALIASES
 
@@ -100,4 +101,5 @@ def score_portfolio(soa: pd.DataFrame, behavior: pd.DataFrame, dpd_cap: float = 
     # Tier derived from final score, using config cutoffs
     df["risk_tier"] = df["risk_score"].apply(_tier_from_score)
 
-    return df
+    # Descriptive Bounce_Type label (does not affect the score above)
+    return add_bounce_type(df)

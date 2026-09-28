@@ -39,6 +39,21 @@ def find_raw_files() -> Tuple[Optional[Path], Optional[Path]]:
     return soa_file, mis_file
 
 
+def _drop_blank_loan_numbers(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
+    """Drop rows with a missing/blank loan_number before it gets cast to the literal string 'nan'.
+
+    Without this, blank loan numbers on both sides of a join collapse into a
+    single fake match (every blank == every other blank), which silently
+    corrupts the behavior-feature join and the risk summary.
+    """
+    blank_mask = df["loan_number"].isna() | (df["loan_number"].astype(str).str.strip() == "")
+    n_blank = int(blank_mask.sum())
+    if n_blank:
+        print(f"-> Dropping {n_blank:,} {source_name} row(s) with a blank loan number")
+        df = df[~blank_mask].copy()
+    return df
+
+
 def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     """Standardize headers and typecast an SOA dataframe, regardless of where it came from (CSV or DB)."""
     soa = soa.copy()
@@ -53,6 +68,7 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     if missing:
         sys.exit(f"SOA data missing required column(s): {missing}")
 
+    soa = _drop_blank_loan_numbers(soa, "SOA")
     soa["loan_number"] = soa["loan_number"].astype(str).str.strip()
     soa["dpd"] = pd.to_numeric(soa["dpd"], errors="coerce").fillna(0)
     soa["total_dues"] = pd.to_numeric(soa["total_dues"], errors="coerce").fillna(0)
@@ -60,6 +76,11 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     for col in ["total_loan_outstanding_amount", "bucket", "emi_amount", "loan_amount", "charges_payable", "charges_2"]:
         if col in soa.columns:
             soa[col] = pd.to_numeric(soa[col], errors="coerce").fillna(0)
+
+    # Dates used for months-on-books (MOB): disbursal date and the report/cycle date.
+    for col in ["disbursal_date", "cycle_date"]:
+        if col in soa.columns:
+            soa[col] = pd.to_datetime(soa[col], errors="coerce", dayfirst=True)
 
     return soa
 
@@ -73,6 +94,7 @@ def prepare_mis(mis: pd.DataFrame) -> pd.DataFrame:
     if missing:
         sys.exit(f"MIS data missing required column(s): {missing}")
 
+    mis = _drop_blank_loan_numbers(mis, "MIS")
     mis["loan_number"] = mis["loan_number"].astype(str).str.strip()
     if "total_amount_collected" in mis.columns:
         mis["total_amount_collected"] = pd.to_numeric(mis["total_amount_collected"], errors="coerce").fillna(0)

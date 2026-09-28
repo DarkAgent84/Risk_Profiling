@@ -22,6 +22,7 @@ OUTPUT_COLUMNS = [
     "product_name", "zone", "risk_type", "npa_tag",
     "never_worked", "total_receipts", "rejected_receipts", "rejection_rate",
     "partial_payment_rate", "total_collected", "last_payment_date",
+    "disbursal_date", "bounce_type",
     "risk_score", "risk_tier",
 ]
 

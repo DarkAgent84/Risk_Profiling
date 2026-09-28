@@ -43,6 +43,14 @@ def print_portfolio_summary(df: pd.DataFrame) -> None:
     summary["Total_Dues_INR"] = summary["Total_Dues"].apply(format_inr)
     cols = ["Loan_Count", "Loan_Share_%", "Total_Dues_INR", "Dues_Share_%", "Avg_DPD", "Avg_Score"]
     print(summary[cols].to_string())
+
+    if "bounce_type" in df.columns:
+        print("\n" + "-" * 70)
+        print("BOUNCE TYPE BREAKDOWN")
+        print("-" * 70)
+        order = ["Never Bounced", "Ever Bounced", "Always Bounced", "3 MOB", "4 MOB", "5 MOB", "6 MOB", "7+ MOB"]
+        counts = df["bounce_type"].value_counts().reindex(order).fillna(0).astype(int)
+        print(pd.DataFrame({"Loan_Count": counts, "Loan_Share_%": (counts / total * 100).round(2) if total else 0}).to_string())
     print("=" * 70 + "\n")
 
 

@@ -35,6 +35,11 @@ UNWORKED_OVERDUE_PENALTY = 0.50    # score applied when a loan is overdue but ha
 TIER_HIGH_CUTOFF = 0.66          # score >= this -> High
 TIER_MEDIUM_CUTOFF = 0.33        # score >= this (and < High) -> Medium; below -> Low
 
+# --- Bounce Type categorization (derived attributes; they do NOT feed the risk score) ---
+ALWAYS_BOUNCED_RATE = 0.60         # bounce rate >= 60% of receipts -> "Always Bounced"
+MOB_MIN = 3                        # loans younger than this many months get no MOB bucket
+MOB_TOP = 7                        # this many months and above -> "7+ MOB"
+
 # --- MIS keyword flags ---
 REJECTED_STATUS_KEYWORDS = ["reject", "bounce", "disapprov", "fail"]
 PARTIAL_PAYMENT_KEYWORD = "part payment"
