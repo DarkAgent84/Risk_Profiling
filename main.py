@@ -19,7 +19,7 @@ from src.report import print_portfolio_summary, evaluate_against_soa
 
 OUTPUT_COLUMNS = [
     "loan_number", "dpd", "bucket", "total_dues", "total_loan_outstanding_amount",
-    "product_name", "zone", "customer_type", "risk_type", "npa_tag",
+    "product_name", "zone", "soa_customer_type", "customer_type", "risk_type", "npa_tag",
     "never_worked", "total_receipts", "rejected_receipts", "rejection_rate",
     "partial_payment_rate", "total_collected", "last_payment_date",
     "disbursal_date", "bounce_type", "matured_overdue",

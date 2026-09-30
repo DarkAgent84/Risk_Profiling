@@ -66,9 +66,8 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
     product = df["product_name"].astype(str).str.upper() if "product_name" in df.columns else pd.Series("", index=df.index)
     risk_type = df["risk_type"].astype(str).str.strip().str.lower() if "risk_type" in df.columns else pd.Series("", index=df.index)
 
-    # Evidence of any bounce history
+    # Evidence of any bounce history (purely computed from financial, collection, and delinquency signals)
     escalated_buckets = {"30-59", "60-89", "90+", "jan-29", "1-29"}
-    raw_cust_type = df["customer_type"].astype(str).str.strip().str.lower() if "customer_type" in df.columns else pd.Series("", index=df.index)
 
     has_bounced = (
         (c2 > 0)
@@ -80,11 +79,10 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
         | (rejected_receipts > 0)
         | has_collector
         | (risk_type.isin(["medium", "high"]))
-        | (raw_cust_type == "ever bounce")
     )
 
     # ---------------------------------------------------------
-    # 1. customer_type (4-class Banking Benchmark)
+    # 1. customer_type (4-class Banking Benchmark - Algorithmic)
     # ---------------------------------------------------------
     matured_flag = df.get("matured_overdue", pd.Series(False, index=df.index))
     matured_mask = (emi_due.notna() & cycle.notna() & (emi_due < cycle)) | matured_flag
@@ -96,13 +94,13 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
     cust_type_pred[mob3_mask] = "3 MOB"
     cust_type_pred[matured_mask] = "Matured"
 
-    if "customer_type" in df.columns and df["customer_type"].notna().any():
-        df["customer_type"] = df["customer_type"].fillna(cust_type_pred)
-    else:
-        df["customer_type"] = cust_type_pred
+    # Retain raw label as soa_customer_type for audit/comparison, assign prediction to customer_type
+    if "customer_type" in df.columns and "soa_customer_type" not in df.columns:
+        df["soa_customer_type"] = df["customer_type"]
+    df["customer_type"] = cust_type_pred
 
     # ---------------------------------------------------------
-    # 2. bounce_type (8-class Granular Specification)
+    # 2. bounce_type (8-class Granular Specification - Algorithmic)
     # ---------------------------------------------------------
     bounce_granular = pd.Series("Never Bounced", index=df.index, dtype=object)
     bounce_granular[has_bounced] = "Ever Bounced"
