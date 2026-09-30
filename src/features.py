@@ -1,5 +1,15 @@
 """
 Behavioral features: aggregate per-transaction MIS receipts into per-loan stats.
+
+Bounce ("is_rejected") logic (see config.py for sources) — a receipt counts
+as a bounce if ANY of the following hold. If the money didn't land, it
+counts against the customer regardless of whose fault it was:
+  - current status is "Rejected by Operations" (or similar keyword match), or
+  - Rejection Count > 0 — it was rejected at some point, even if later
+    re-submitted and approved (status text alone misses this — see A25 in
+    the dataset report), or
+  - status is a cancelled/"Deleted" variant — the receipt was voided, so the
+    payment never successfully completed either way.
 """
 import pandas as pd
 
@@ -13,8 +23,10 @@ def build_behavior_features(mis: pd.DataFrame) -> pd.DataFrame:
     status = mis["instrument_status"].astype(str).str.strip().str.lower()
     ptype = mis["payment_type"].astype(str).str.strip().str.lower()
 
-    pattern = "|".join(config.REJECTED_STATUS_KEYWORDS)
-    mis["is_rejected"] = status.str.contains(pattern, regex=True).astype(int)
+    status_rejected = status.str.contains("|".join(config.REJECTED_STATUS_KEYWORDS), regex=True)
+    status_cancelled = status.str.contains(config.CANCELLED_STATUS_KEYWORD, regex=False)
+    count_rejected = (mis["rejection_count"] > 0) if "rejection_count" in mis.columns else False
+    mis["is_rejected"] = (status_rejected | status_cancelled | count_rejected).astype(int)
     mis["is_partial"] = (ptype == config.PARTIAL_PAYMENT_KEYWORD).astype(int)
 
     agg = {"is_rejected": ["count", "sum", "mean"], "is_partial": "mean"}

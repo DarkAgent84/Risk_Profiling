@@ -40,8 +40,14 @@ ALWAYS_BOUNCED_RATE = 0.60         # bounce rate >= 60% of receipts -> "Always B
 MOB_MIN = 3                        # loans younger than this many months get no MOB bucket
 MOB_TOP = 7                        # this many months and above -> "7+ MOB"
 
-# --- MIS keyword flags ---
+# --- MIS Instrument Status groups ---
+# Source: Dataset Understanding & Analysis Report §5/§15 (A25 rejection funnel).
+# A receipt counts as a bounce (see src/features.py) if the money never
+# successfully landed, whoever's fault it was — that's status = rejected,
+# Rejection Count > 0 (rejected then later fixed), OR status = cancelled/
+# "Deleted" (voided). All three are treated as a bounce.
 REJECTED_STATUS_KEYWORDS = ["reject", "bounce", "disapprov", "fail"]
+CANCELLED_STATUS_KEYWORD = "deleted"
 PARTIAL_PAYMENT_KEYWORD = "part payment"
 
 # --- Bucket labels Excel commonly mangles into a date (e.g. "1-29" -> "Jan-29") ---

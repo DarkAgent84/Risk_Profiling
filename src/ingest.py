@@ -29,7 +29,7 @@ def find_raw_files() -> Tuple[Optional[Path], Optional[Path]]:
         candidates = sorted(d.glob("*.csv"), key=lambda p: ("copy" in p.name.lower(), p.name))
         for f in candidates:
             name = f.name.lower()
-            if "soa" in name and not soa_file:
+            if ("soa" in name or "customer" in name) and not soa_file:
                 soa_file = f
             elif ("mis" in name or "collection" in name) and "risk" not in name and "scored" not in name and not mis_file:
                 mis_file = f
@@ -59,10 +59,10 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     soa = soa.copy()
     soa.columns = [normalize_column_name(c) for c in soa.columns]
 
-    # customer_type is intentionally excluded from this pipeline — it is not
-    # used as a scoring input and should not appear in output either.
+    # customer_type is retained for audit/evaluation, but never used as an input to risk scoring.
     if "customer_type" in soa.columns:
-        soa = soa.drop(columns=["customer_type"])
+        soa["customer_type"] = soa["customer_type"].astype(str).str.strip()
+        soa["customer_type"] = soa["customer_type"].replace({"nan": None, "None": None})
 
     missing = [c for c in ["loan_number", "dpd", "total_dues"] if c not in soa.columns]
     if missing:
@@ -77,8 +77,8 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
         if col in soa.columns:
             soa[col] = pd.to_numeric(soa[col], errors="coerce").fillna(0)
 
-    # Dates used for months-on-books (MOB): disbursal date and the report/cycle date.
-    for col in ["disbursal_date", "cycle_date"]:
+    # Dates used for months-on-books (MOB) and the matured-overdue check below.
+    for col in ["disbursal_date", "cycle_date", "emi_due_date"]:
         if col in soa.columns:
             soa[col] = pd.to_datetime(soa[col], errors="coerce", dayfirst=True)
 
@@ -100,6 +100,11 @@ def prepare_mis(mis: pd.DataFrame) -> pd.DataFrame:
         mis["total_amount_collected"] = pd.to_numeric(mis["total_amount_collected"], errors="coerce").fillna(0)
     if "payment_date" in mis.columns:
         mis["payment_date"] = pd.to_datetime(mis["payment_date"], errors="coerce", dayfirst=True)
+    # Rejection Count is blank for never-rejected receipts and 1-5 for receipts
+    # that were rejected at least once (even if later re-submitted and approved).
+    # This is what makes "ever rejected" detectable — see features.py.
+    if "rejection_count" in mis.columns:
+        mis["rejection_count"] = pd.to_numeric(mis["rejection_count"], errors="coerce").fillna(0)
 
     return mis
 

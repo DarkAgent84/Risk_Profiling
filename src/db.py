@@ -22,7 +22,18 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 
+def _require_password() -> None:
+    """Fail early with a clear message if no DB password has been provided."""
+    if not config.DB_CONFIG["password"]:
+        raise SystemExit(
+            "Error: no database password set.\n"
+            "In PowerShell run:  $env:RISK_DB_PASSWORD = \"your_postgres_password\"\n"
+            "(it only lasts for the current PowerShell window), then re-run the command."
+        )
+
+
 def _get_db_url(dbname: Optional[str] = None) -> str:
+    _require_password()
     c = config.DB_CONFIG
     db = dbname or c["dbname"]
     return f"postgresql+psycopg2://{c['user']}:{c['password']}@{c['host']}:{c['port']}/{db}"
@@ -33,6 +44,7 @@ def get_engine(dbname: Optional[str] = None):
 
 
 def _get_raw_connection(dbname: Optional[str] = None):
+    _require_password()
     c = config.DB_CONFIG
     return psycopg2.connect(host=c["host"], port=c["port"], user=c["user"], password=c["password"], dbname=dbname or c["dbname"])
 

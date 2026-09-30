@@ -48,8 +48,11 @@ def print_portfolio_summary(df: pd.DataFrame) -> None:
         print("\n" + "-" * 70)
         print("BOUNCE TYPE BREAKDOWN")
         print("-" * 70)
-        order = ["Never Bounced", "Ever Bounced", "Always Bounced", "3 MOB", "4 MOB", "5 MOB", "6 MOB", "7+ MOB"]
+        order = ["Never Bounce", "Ever Bounce", "Matured", "3 MOB"]
         counts = df["bounce_type"].value_counts().reindex(order).fillna(0).astype(int)
+        other = df["bounce_type"].loc[~df["bounce_type"].isin(order)].value_counts()
+        if not other.empty:
+            counts = pd.concat([counts, other])
         print(pd.DataFrame({"Loan_Count": counts, "Loan_Share_%": (counts / total * 100).round(2) if total else 0}).to_string())
     print("=" * 70 + "\n")
 
@@ -112,4 +115,17 @@ def evaluate_against_soa(soa_path: str | Path, scored_path: str | Path) -> None:
         print(f"[*] Exact match count        : {match_count:,} / {len(valid):,}")
         print(f"[*] Accuracy on valid tiers   : {acc_valid * 100:.2f}%")
         print(f"[*] Accuracy on full dataset  : {acc_total * 100:.2f}%")
+
+    if "Customer Type" in soa.columns and "bounce_type" in df.columns:
+        print("\n" + "=" * 75)
+        print("BOUNCE TYPE VS SOA 'CUSTOMER TYPE' EVALUATION")
+        print("=" * 75)
+        ct_cust = pd.crosstab(df["Customer Type"].fillna("Unassigned / NaN"), df["bounce_type"], margins=True, margins_name="Total")
+        print("\n--- 1. CONFUSION MATRIX (Customer Type vs bounce_type) ---")
+        print(ct_cust)
+        valid_cust = df[df["Customer Type"].notna()].copy()
+        cust_match = int((valid_cust["Customer Type"] == valid_cust["bounce_type"]).sum())
+        cust_acc = (valid_cust["Customer Type"] == valid_cust["bounce_type"]).mean() if len(valid_cust) else 0.0
+        print(f"\n[*] Exact match count         : {cust_match:,} / {len(valid_cust):,}")
+        print(f"[*] Accuracy on Customer Type  : {cust_acc * 100:.2f}%")
     print("=" * 75 + "\n")

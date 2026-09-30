@@ -8,10 +8,12 @@ Design:
      every loan, since customer_type is no longer used as an input anywhere
      in this pipeline (removed from scoring, ingestion, and output).
   2. An NPA safety floor is applied: any loan at/beyond NPA_DPD_THRESHOLD
-     days-past-due is floored at NPA_FLOOR_SCORE, no matter what the raw
-     rule produced. There's no early-vintage exemption any more — that
-     concept came from customer_type == "3 MOB", which no longer exists as
-     a signal, so every loan is judged purely on bucket/DPD/dues/behavior.
+     days-past-due, OR flagged matured_overdue (contractual tenure has
+     lapsed and it's still carrying dues/DPD — see src/matured.py), is
+     floored at NPA_FLOOR_SCORE. There's no early-vintage exemption any
+     more — that concept came from customer_type == "3 MOB", which no
+     longer exists as a signal, so every loan is judged purely on
+     bucket/DPD/dues/behavior/tenure.
   3. The tier label (High / Medium / Low) is derived from the FINAL score
      using config.TIER_HIGH_CUTOFF / TIER_MEDIUM_CUTOFF. Tier labels are
      never hardcoded next to a score value — this is the one place tiers
@@ -22,6 +24,7 @@ import pandas as pd
 
 import config
 from src.bounce import add_bounce_type
+from src.matured import add_matured_overdue
 
 ESCALATED_BUCKETS = {"30-59", "60-89", "90+"} | config.EARLY_BUCKET_ALIASES
 
@@ -93,8 +96,11 @@ def score_portfolio(soa: pd.DataFrame, behavior: pd.DataFrame, dpd_cap: float = 
     # Raw bucket/DPD escalation score — same rule for every loan
     df["risk_score"] = df.apply(_raw_score, axis=1)
 
-    # NPA floor: enforced here, applies to every loan uniformly
-    npa_hit = df["dpd"] >= config.NPA_DPD_THRESHOLD
+    # matured_overdue: tenure has contractually lapsed and dues/DPD remain (see src/matured.py)
+    df = add_matured_overdue(df)
+
+    # NPA floor: DPD>=90 OR matured_overdue, applies to every loan uniformly
+    npa_hit = (df["dpd"] >= config.NPA_DPD_THRESHOLD) | df["matured_overdue"]
     df["risk_score"] = np.where(npa_hit, np.maximum(df["risk_score"], config.NPA_FLOOR_SCORE), df["risk_score"])
     df["risk_score"] = df["risk_score"].round(3)
 

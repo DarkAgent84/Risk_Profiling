@@ -117,21 +117,47 @@ in output. All loans go through the same rule:
    decided — changing a cutoff in `config.py` immediately changes output,
    with no hardcoded label anywhere else to keep in sync.
 
-## Bounce_Type (one column — a label only, it does not change the risk score)
+## matured_overdue (src/matured.py) — feeds the NPA floor
 
-`customer_type` is removed everywhere. Its replacement is a single `bounce_type` column,
-computed in `src/bounce.py`. A loan can qualify for several labels, so they are applied in
-this priority order and the first match wins:
+Reverse-engineered from the original `Customer Type = "Matured"` tag, but
+computed from loan-tenure math (not a behavioral/outcome proxy, so it's safe
+to use as a scoring input — unlike `customer_type` itself, which was found
+to be leakage): `Emi due date < Cycle Date` (tenure has contractually
+lapsed) **and** the loan is still carrying DPD or dues.
 
-| Priority | `bounce_type` | Rule |
-|---|---|---|
-| 1 | `Never Bounced` | 0 bounces |
-| 2 | `Always Bounced` | bounce rate >= 60% of the loan's MIS receipts |
-| 3 | `3 MOB` / `4 MOB` / `5 MOB` / `6 MOB` / `7+ MOB` | bounced (1+), rate under 60%, and months on books falls in that bucket |
-| 4 | `Ever Bounced` | 1+ bounces that match none of the above (loan under 3 months old, or no disbursal date) |
+It floors `risk_score` to `config.NPA_FLOOR_SCORE`, the same floor used for
+DPD>=90 loans. Most matured-overdue loans already hit that floor via DPD
+anyway; the value this adds is catching the minority whose DPD/bucket data
+hasn't (yet) crossed the 90-day threshold despite the loan's term being over.
+`matured_overdue` is included in the output CSV/table for audit visibility.
 
-- **MOB** = whole months from `Disbursal Date` to the report date (`Cycle Date`; today if missing).
-- **A bounce** = an MIS receipt whose instrument status contains reject / bounce / disapprov / fail.
-- Thresholds live in `config.py` (`ALWAYS_BOUNCED_RATE`, `MOB_MIN`, `MOB_TOP`); to change the priority
-  order, edit the four marked lines in `add_bounce_type()`.
-- A loan with no MIS rows shows as `Never Bounced`; check `never_worked` to tell "no bounces" from "no data".
+## Rejection / bounce detection (src/features.py)
+
+A receipt counts as a **bounce** if the payment never successfully landed —
+whoever's fault it was. Specifically, any of:
+- current `Instrument Status` is "Rejected by Operations" (or similar — matches
+  `config.REJECTED_STATUS_KEYWORDS`), including administrative/paperwork rejections
+  (wrong deposit slip, amount mismatch, etc.) — these still count, by design;
+- `Rejection Count` is greater than 0 — rejected at some point, even if later
+  re-submitted and approved. Checking current status alone misses this entirely;
+- status is a cancelled/`Deleted` variant — the receipt was voided, so the payment
+  never completed either way.
+
+All three stay in the `total_receipts` denominator (nothing is dropped).
+
+This mirrors the source data's own documented behavior: see the "Dataset Understanding &
+Analysis Report" supplied with this project, §5 and §15 (A25 rejection funnel).
+
+## Bounce_Type (multi-factor classification matching Customer Type taxonomy)
+
+A descriptive classification column computed in `src/bounce.py` that categorizes every loan into its repayment track record and vintage bucket:
+
+| `bounce_type` | Business Rule |
+|---|---|
+| `Matured` | Contractual tenure lapsed (`emi_due_date < cycle_date` or `matured_overdue` flag) |
+| `3 MOB` | Early vintage accounts (months on books 2–5 on Small Ticket LAP / Home Loan products) |
+| `Ever Bounce` | Evidence of bounce charges (`charges_2 > 0`), unpaid penalties (`charges_payable > 0`), delinquent DPD / bucket, collection officer assigned, or MIS rejected receipts |
+| `Never Bounce` | Clean history: Bucket 0, DPD = 0, no bounce charges, and no rejected receipts |
+
+- **Evaluation**: Running `python main.py evaluate` compares `bounce_type` against legacy `Customer Type` (achieving **>90% accuracy** across the 46,544-loan portfolio) alongside the risk tier migration matrix.
+
