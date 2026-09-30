@@ -148,20 +148,28 @@ All three stay in the `total_receipts` denominator (nothing is dropped).
 This mirrors the source data's own documented behavior: see the "Dataset Understanding &
 Analysis Report" supplied with this project, §5 and §15 (A25 rejection funnel).
 
-## Bounce_Type (Granular 8-Category Specification)
+## Dual Columns: Customer Type & Bounce Type
 
-A descriptive classification column computed in `src/bounce.py` that categorizes every loan by its bounce incidence and vintage progression:
+The pipeline produces two complementary categorization columns for every loan:
 
-| Category | Definition | Qualification Rule |
-|---|---|---|
-| `Never Bounced` | 0 no. of Bounces | Clean record: no rejected receipts, zero bounce charges, Bucket 0 |
-| `Ever Bounced` | 1+ no. of Bounces | Bounced account with unassigned MOB or under 3 months on book |
-| `Always Bounced` | 60%+ Bounces | Bounced account with rejection rate $\ge$ 60% of MIS receipts |
-| `3 MOB` | Disburse date + 3 month bounce | Bounced account with 3 months on books |
-| `4 MOB` | Disburse date + 4 month bounce | Bounced account with 4 months on books |
-| `5 MOB` | Disburse date + 5 month bounce | Bounced account with 5 months on books |
-| `6 MOB` | Disburse date + 6 month bounce | Bounced account with 6 months on books |
-| `7+ MOB` | Disburse date + 7+ month bounce | Bounced account with 7 or more months on books |
+### 1. `customer_type` (4-Class Banking Benchmark)
+Preserves and predicts the core banking repayment profile:
+- **`Never Bounce`**: Clean record, 0 bounces, current bucket, no bounce fees.
+- **`Ever Bounce`**: 1+ historical bounces (bounce charges, overdue DPD/bucket, rejected receipts).
+- **`Matured`**: Contractual tenure lapsed (`emi_due_date < cycle_date` or `matured_overdue`).
+- **`3 MOB`**: Early vintage accounts (months on books 2–5 on Small Ticket LAP / Home Loan products).
 
-- **Evaluation**: Running `python main.py evaluate` compares granular `bounce_type` against the legacy 4-class `Customer Type` with full cross-tabulation and mapped alignment.
+### 2. `bounce_type` (8-Class Granular Specification)
+Categorizes loans into the specific 8-tier operational attribute:
+- **`Never Bounced`**: 0 no. of bounces (clean).
+- **`Always Bounced`**: Bounce / rejection rate $\ge 60\%$.
+- **`3 MOB`**: Disbursed date + 3 months bounce.
+- **`4 MOB`**: Disbursed date + 4 months bounce.
+- **`5 MOB`**: Disbursed date + 5 months bounce.
+- **`6 MOB`**: Disbursed date + 6 months bounce.
+- **`7+ MOB`**: Disbursed date + 7+ months bounce.
+- **`Ever Bounced`**: 1+ bounces fallback (loans under 3 months old or general).
+
+Running `python main.py evaluate` prints the cross-tabulation and evaluation metrics for both columns.
+
 

@@ -44,11 +44,22 @@ def print_portfolio_summary(df: pd.DataFrame) -> None:
     cols = ["Loan_Count", "Loan_Share_%", "Total_Dues_INR", "Dues_Share_%", "Avg_DPD", "Avg_Score"]
     print(summary[cols].to_string())
 
+    if "customer_type" in df.columns:
+        print("\n" + "-" * 70)
+        print("CUSTOMER TYPE BREAKDOWN (4-Class Banking Benchmark)")
+        print("-" * 70)
+        order_cust = ["Never Bounce", "Ever Bounce", "Matured", "3 MOB"]
+        counts_cust = df["customer_type"].value_counts().reindex(order_cust).fillna(0).astype(int)
+        other_cust = df["customer_type"].loc[~df["customer_type"].isin(order_cust)].value_counts()
+        if not other_cust.empty:
+            counts_cust = pd.concat([counts_cust, other_cust])
+        print(pd.DataFrame({"Loan_Count": counts_cust, "Loan_Share_%": (counts_cust / total * 100).round(2) if total else 0}).to_string())
+
     if "bounce_type" in df.columns:
         print("\n" + "-" * 70)
-        print("BOUNCE TYPE BREAKDOWN (GRANULAR 8-CATEGORY)")
+        print("BOUNCE TYPE BREAKDOWN (8-Class Granular Specification)")
         print("-" * 70)
-        order = ["Never Bounced", "Ever Bounced", "Always Bounced", "3 MOB", "4 MOB", "5 MOB", "6 MOB", "7+ MOB"]
+        order = ["Never Bounced", "Always Bounced", "3 MOB", "4 MOB", "5 MOB", "6 MOB", "7+ MOB", "Ever Bounced"]
         counts = df["bounce_type"].value_counts().reindex(order).fillna(0).astype(int)
         other = df["bounce_type"].loc[~df["bounce_type"].isin(order)].value_counts()
         if not other.empty:
@@ -116,31 +127,22 @@ def evaluate_against_soa(soa_path: str | Path, scored_path: str | Path) -> None:
         print(f"[*] Accuracy on valid tiers   : {acc_valid * 100:.2f}%")
         print(f"[*] Accuracy on full dataset  : {acc_total * 100:.2f}%")
 
-    if "Customer Type" in soa.columns and "bounce_type" in df.columns:
+    if "Customer Type" in soa.columns:
         print("\n" + "=" * 75)
-        print("BOUNCE TYPE (8-CATEGORY) VS SOA 'CUSTOMER TYPE' EVALUATION")
+        print("CUSTOMER TYPE & BOUNCE TYPE EVALUATION")
         print("=" * 75)
-        ct_cust = pd.crosstab(df["Customer Type"].fillna("Unassigned / NaN"), df["bounce_type"], margins=True, margins_name="Total")
-        cols_b = [c for c in ["Never Bounced", "Ever Bounced", "Always Bounced", "3 MOB", "4 MOB", "5 MOB", "6 MOB", "7+ MOB", "Total"] if c in ct_cust.columns]
-        print("\n--- 1. CROSSTAB MATRIX (Customer Type vs Granular Bounce Type) ---")
-        with pd.option_context("display.max_columns", 15, "display.width", 120):
-            print(ct_cust[cols_b] if cols_b else ct_cust)
+        if "customer_type" in df.columns:
+            print("\n--- 1. BENCHMARK: SOA 'CUSTOMER TYPE' VS MODEL 'customer_type' ---")
+            ct_cust = pd.crosstab(df["Customer Type"].fillna("Unassigned / NaN"), df["customer_type"], margins=True, margins_name="Total")
+            print(ct_cust)
+            valid_cust = df[df["Customer Type"].notna()].copy()
+            cust_match = int((valid_cust["Customer Type"] == valid_cust["customer_type"]).sum())
+            cust_acc = (valid_cust["Customer Type"] == valid_cust["customer_type"]).mean() if len(valid_cust) else 0.0
+            print(f"\n[*] Exact match count          : {cust_match:,} / {len(valid_cust):,}")
+            print(f"[*] Accuracy on Customer Type   : {cust_acc * 100:.2f}%")
 
-        # Mapped alignment: 8 categories mapped to the 4 broad legacy banking groups
-        mapping = {
-            "Never Bounced": "Never Bounce",
-            "3 MOB": "3 MOB",
-            "Ever Bounced": "Ever Bounce",
-            "Always Bounced": "Ever Bounce",
-            "4 MOB": "Ever Bounce",
-            "5 MOB": "Ever Bounce",
-            "6 MOB": "Ever Bounce",
-            "7+ MOB": "Ever Bounce",
-        }
-        df["mapped_bounce_type"] = df["bounce_type"].map(mapping)
-        valid_cust = df[df["Customer Type"].isin(["Never Bounce", "Ever Bounce", "3 MOB"])].copy()
-        cust_match = int((valid_cust["Customer Type"] == valid_cust["mapped_bounce_type"]).sum())
-        cust_acc = (valid_cust["Customer Type"] == valid_cust["mapped_bounce_type"]).mean() if len(valid_cust) else 0.0
-        print(f"\n[*] Mapped Alignment Count     : {cust_match:,} / {len(valid_cust):,}")
-        print(f"[*] Mapped Alignment Accuracy  : {cust_acc * 100:.2f}%")
+        if "bounce_type" in df.columns:
+            print("\n--- 2. GRANULAR BOUNCE TYPE MATRIX (Customer Type vs bounce_type) ---")
+            ct_bounce = pd.crosstab(df["Customer Type"].fillna("Unassigned / NaN"), df["bounce_type"], margins=True, margins_name="Total")
+            print(ct_bounce)
     print("=" * 75 + "\n")

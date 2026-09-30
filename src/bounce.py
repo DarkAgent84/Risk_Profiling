@@ -1,25 +1,22 @@
 """
-Bounce_Type: Categorizes every loan into the granular 8-category Bounce Type specification.
+Bounce & Customer Categorization:
+Provides dual classification columns for collections risk analysis:
 
-It is a descriptive label only — it does not change risk_score or risk_tier.
+1. customer_type (4-class banking benchmark):
+   - Never Bounce: Clean repayment history, 0 bounces, current bucket
+   - Ever Bounce:  1+ historical bounces (bounce charges, delinquency, rejections)
+   - Matured:      Contractual loan tenure lapsed (emi_due_date < cycle_date)
+   - 3 MOB:        Early vintage loans (months on books 2-5 on STL / Home Loan)
 
-Categories:
------------
-  Never Bounced   0 bounces (clean repayment track record)
-  Ever Bounced    1+ bounces (general / loans under 3 months old or missing vintage)
-  Always Bounced  bounce rate >= config.ALWAYS_BOUNCED_RATE (60%+ of receipts)
-  3 MOB           Disburse date + 3 month bounce
-  4 MOB           Disburse date + 4 month bounce
-  5 MOB           Disburse date + 5 month bounce
-  6 MOB           Disburse date + 6 month bounce
-  7+ MOB          Disburse date + 7+ month bounce
-
-Priority Order:
----------------
-  1. Never Bounced (0 bounces)
-  2. Always Bounced (>=60% bounce rate)
-  3. MOB Buckets (3 MOB, 4 MOB, 5 MOB, 6 MOB, 7+ MOB)
-  4. Ever Bounced (bounced, fallback)
+2. bounce_type (8-class granular specification):
+   - Never Bounced: 0 bounces (clean record)
+   - Always Bounced: >=60% rejection/bounce rate on receipts
+   - 3 MOB:         Bounced account at 3 months post-disbursal
+   - 4 MOB:         Bounced account at 4 months post-disbursal
+   - 5 MOB:         Bounced account at 5 months post-disbursal
+   - 6 MOB:         Bounced account at 6 months post-disbursal
+   - 7+ MOB:        Bounced account at 7+ months post-disbursal
+   - Ever Bounced:  1+ bounces fallback (under 3 months old or general)
 """
 import numpy as np
 import pandas as pd
@@ -40,36 +37,22 @@ def _col_numeric(df: pd.DataFrame, col: str) -> pd.Series:
     return pd.Series(0.0, index=df.index, dtype=float)
 
 
-def _mob_bucket(m) -> str:
-    """Map months-on-books integer to granular MOB bucket."""
-    if pd.isna(m) or m < 3:
-        return "Ever Bounced"
-    if m == 3:
-        return "3 MOB"
-    if m == 4:
-        return "4 MOB"
-    if m == 5:
-        return "5 MOB"
-    if m == 6:
-        return "6 MOB"
-    return "7+ MOB"
-
-
 def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
-    """Add the granular 8-category 'bounce_type' column to the dataframe."""
+    """Add dual classification columns: 'customer_type' (4-class) and 'bounce_type' (8-class granular)."""
     df = df.copy()
 
     # Dates and Months on Books (MOB)
     today = pd.Timestamp.today().normalize()
     disbursal = pd.to_datetime(df.get("disbursal_date"), errors="coerce", dayfirst=True)
     cycle = pd.to_datetime(df.get("cycle_date"), errors="coerce", dayfirst=True).fillna(today)
+    emi_due = pd.to_datetime(df.get("emi_due_date"), errors="coerce", dayfirst=True)
 
     if disbursal.notna().any():
         mob = _months_between(disbursal, cycle)
     else:
         mob = pd.Series(np.nan, index=df.index)
 
-    # Financial & collection bounce indicators
+    # Financial & collection signals
     c2 = _col_numeric(df, "charges_2")
     c3 = _col_numeric(df, "charges_3")
     c_pay = _col_numeric(df, "charges_payable")
@@ -80,36 +63,57 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
 
     bkt = df["bucket_group"].astype(str).str.strip().str.lower() if "bucket_group" in df.columns else pd.Series("", index=df.index)
     has_collector = df["app_user_id"].notna() if "app_user_id" in df.columns else pd.Series(False, index=df.index)
+    product = df["product_name"].astype(str).str.upper() if "product_name" in df.columns else pd.Series("", index=df.index)
     risk_type = df["risk_type"].astype(str).str.strip().str.lower() if "risk_type" in df.columns else pd.Series("", index=df.index)
-    cust_type = df["customer_type"].astype(str).str.strip().str.lower() if "customer_type" in df.columns else pd.Series("", index=df.index)
 
+    # Evidence of any bounce history
     escalated_buckets = {"30-59", "60-89", "90+", "jan-29", "1-29"}
+    raw_cust_type = df["customer_type"].astype(str).str.strip().str.lower() if "customer_type" in df.columns else pd.Series("", index=df.index)
 
-    # Bounced loan detection (combining MIS rejected receipts + SOA bounce indicators)
     has_bounced = (
-        (rejected_receipts > 0)
-        | (c2 > 0)
+        (c2 > 0)
         | (c3 > 0)
         | (c_pay > 0)
         | (dpd > 0)
         | (dues > 0)
         | (bkt.isin(escalated_buckets))
+        | (rejected_receipts > 0)
         | has_collector
         | (risk_type.isin(["medium", "high"]))
-        | (cust_type == "ever bounce")
+        | (raw_cust_type == "ever bounce")
     )
 
-    # 1. Base: loans with 0 bounces get "Never Bounced"
-    bounce_type = pd.Series("Never Bounced", index=df.index, dtype=object)
+    # ---------------------------------------------------------
+    # 1. customer_type (4-class Banking Benchmark)
+    # ---------------------------------------------------------
+    matured_flag = df.get("matured_overdue", pd.Series(False, index=df.index))
+    matured_mask = (emi_due.notna() & cycle.notna() & (emi_due < cycle)) | matured_flag
+    mob3_mask = product.isin(["SMALL TICKET LAP", "HOME LOAN"]) & mob.isin([2, 3, 4, 5]) & (~matured_mask)
+    ever_mask = has_bounced & (~matured_mask) & (~mob3_mask)
 
-    # 2. Bounced loans: map to MOB bucket (3 MOB ... 7+ MOB, or Ever Bounced if <3 MOB)
-    bounced_idx = df.index[has_bounced]
-    bounce_type.loc[bounced_idx] = mob.loc[bounced_idx].map(_mob_bucket)
+    cust_type_pred = pd.Series("Never Bounce", index=df.index, dtype=object)
+    cust_type_pred[ever_mask] = "Ever Bounce"
+    cust_type_pred[mob3_mask] = "3 MOB"
+    cust_type_pred[matured_mask] = "Matured"
 
-    # 3. Always Bounced: bounce/rejection rate >= 60% of receipts
-    always_bounced_rate = getattr(config, "ALWAYS_BOUNCED_RATE", 0.60)
-    always_bounced_mask = has_bounced & (rejection_rate >= always_bounced_rate) & (rejected_receipts > 0)
-    bounce_type.loc[always_bounced_mask] = "Always Bounced"
+    if "customer_type" in df.columns and df["customer_type"].notna().any():
+        df["customer_type"] = df["customer_type"].fillna(cust_type_pred)
+    else:
+        df["customer_type"] = cust_type_pred
 
-    df["bounce_type"] = bounce_type
+    # ---------------------------------------------------------
+    # 2. bounce_type (8-class Granular Specification)
+    # ---------------------------------------------------------
+    bounce_granular = pd.Series("Never Bounced", index=df.index, dtype=object)
+    bounce_granular[has_bounced] = "Ever Bounced"
+    bounce_granular[has_bounced & (mob >= 7)] = "7+ MOB"
+    bounce_granular[has_bounced & (mob == 6)] = "6 MOB"
+    bounce_granular[has_bounced & (mob == 5)] = "5 MOB"
+    bounce_granular[has_bounced & (mob == 4)] = "4 MOB"
+    bounce_granular[has_bounced & (mob == 3)] = "3 MOB"
+    bounce_granular[rejection_rate >= config.ALWAYS_BOUNCED_RATE] = "Always Bounced"
+
+    df["bounce_type"] = bounce_granular
     return df
+
+
