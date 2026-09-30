@@ -148,16 +148,20 @@ All three stay in the `total_receipts` denominator (nothing is dropped).
 This mirrors the source data's own documented behavior: see the "Dataset Understanding &
 Analysis Report" supplied with this project, §5 and §15 (A25 rejection funnel).
 
-## Bounce_Type (multi-factor classification matching Customer Type taxonomy)
+## Bounce_Type (Granular 8-Category Specification)
 
-A descriptive classification column computed in `src/bounce.py` that categorizes every loan into its repayment track record and vintage bucket:
+A descriptive classification column computed in `src/bounce.py` that categorizes every loan by its bounce incidence and vintage progression:
 
-| `bounce_type` | Business Rule |
-|---|---|
-| `Matured` | Contractual tenure lapsed (`emi_due_date < cycle_date` or `matured_overdue` flag) |
-| `3 MOB` | Early vintage accounts (months on books 2–5 on Small Ticket LAP / Home Loan products) |
-| `Ever Bounce` | Evidence of bounce charges (`charges_2 > 0`), unpaid penalties (`charges_payable > 0`), delinquent DPD / bucket, collection officer assigned, or MIS rejected receipts |
-| `Never Bounce` | Clean history: Bucket 0, DPD = 0, no bounce charges, and no rejected receipts |
+| Category | Definition | Qualification Rule |
+|---|---|---|
+| `Never Bounced` | 0 no. of Bounces | Clean record: no rejected receipts, zero bounce charges, Bucket 0 |
+| `Ever Bounced` | 1+ no. of Bounces | Bounced account with unassigned MOB or under 3 months on book |
+| `Always Bounced` | 60%+ Bounces | Bounced account with rejection rate $\ge$ 60% of MIS receipts |
+| `3 MOB` | Disburse date + 3 month bounce | Bounced account with 3 months on books |
+| `4 MOB` | Disburse date + 4 month bounce | Bounced account with 4 months on books |
+| `5 MOB` | Disburse date + 5 month bounce | Bounced account with 5 months on books |
+| `6 MOB` | Disburse date + 6 month bounce | Bounced account with 6 months on books |
+| `7+ MOB` | Disburse date + 7+ month bounce | Bounced account with 7 or more months on books |
 
-- **Evaluation**: Running `python main.py evaluate` compares `bounce_type` against legacy `Customer Type` (achieving **>90% accuracy** across the 46,544-loan portfolio) alongside the risk tier migration matrix.
+- **Evaluation**: Running `python main.py evaluate` compares granular `bounce_type` against the legacy 4-class `Customer Type` with full cross-tabulation and mapped alignment.
 
