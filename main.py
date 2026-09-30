@@ -62,6 +62,18 @@ def cmd_score(args) -> None:
 
 
 def cmd_evaluate(args) -> None:
+    if getattr(args, "from_db", False):
+        from src.db import fetch_table
+        print("=" * 75)
+        print("   COLLECTIONS RISK PROFILING — EVALUATION FROM POSTGRESQL")
+        print("=" * 75)
+        print("-> Fetching raw_soa_master from PostgreSQL...")
+        soa = fetch_table("raw_soa_master")
+        print("-> Fetching scored_loan_risk_profiles from PostgreSQL...")
+        scored = fetch_table("scored_loan_risk_profiles")
+        evaluate_against_soa(soa, scored)
+        return
+
     soa_path = args.soa
     if not soa_path:
         soa_path, _ = find_raw_files()
@@ -140,9 +152,10 @@ def main() -> None:
                           help="Output filename (relative to data/processed) or a full path")
     p_score.set_defaults(func=cmd_score)
 
-    p_eval = sub.add_parser("evaluate", help="Compare scored output against SOA 'Risk Type'")
+    p_eval = sub.add_parser("evaluate", help="Compare scored output against SOA 'Risk Type' and 'Customer Type'")
     p_eval.add_argument("--soa", type=str, default=None, help="Path to raw SOA CSV")
     p_eval.add_argument("--scored", type=str, default=None, help="Path to scored loans CSV")
+    p_eval.add_argument("--from-db", action="store_true", help="Evaluate directly from PostgreSQL database tables")
     p_eval.set_defaults(func=cmd_evaluate)
 
     p_db = sub.add_parser("sync-db", help="Upload raw SOA + MIS CSVs to PostgreSQL")

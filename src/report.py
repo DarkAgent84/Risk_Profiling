@@ -68,22 +68,41 @@ def print_portfolio_summary(df: pd.DataFrame) -> None:
     print("=" * 70 + "\n")
 
 
-def evaluate_against_soa(soa_path: str | Path, scored_path: str | Path) -> None:
+def evaluate_against_soa(soa_input, scored_input) -> None:
     """Compare model-assigned risk tiers against the original SOA 'Risk Type' column, if present."""
-    soa = pd.read_csv(soa_path, low_memory=False)
+    if isinstance(soa_input, pd.DataFrame):
+        soa = soa_input.copy()
+    else:
+        soa = pd.read_csv(soa_input, low_memory=False)
+
+    if isinstance(scored_input, pd.DataFrame):
+        scored = scored_input.copy()
+    else:
+        scored = pd.read_csv(scored_input, low_memory=False)
+
     soa.columns = [c.strip() for c in soa.columns]
-    loan_col = next((c for c in soa.columns if c.lower().replace(" ", "_") == "loan_number"), "Loan number")
-    soa["loan_number"] = soa[loan_col].astype(str).str.strip()
+    scored.columns = [c.strip() for c in scored.columns]
 
-    scored = pd.read_csv(scored_path, low_memory=False)
-    scored["loan_number"] = scored["loan_number"].astype(str).str.strip()
+    loan_col_soa = next((c for c in soa.columns if c.lower().replace(" ", "_") == "loan_number"), "loan_number")
+    soa["loan_number"] = soa[loan_col_soa].astype(str).str.strip()
 
-    has_risk_type = "Risk Type" in soa.columns
-    meta_cols = [c for c in ["Risk Type", "Customer Type", "Bucket Group", "Zone"] if c in soa.columns]
-    df = scored.merge(soa[["loan_number"] + meta_cols], on="loan_number", how="left")
-    df["soa_risk_type"] = df["Risk Type"].fillna("Unassigned / NaN") if has_risk_type else "Unknown"
+    loan_col_scored = next((c for c in scored.columns if c.lower().replace(" ", "_") == "loan_number"), "loan_number")
+    scored["loan_number"] = scored[loan_col_scored].astype(str).str.strip()
 
-    total_dues_cr = df["total_dues"].sum() / 1e7 if df["total_dues"].sum() else 1.0
+    risk_col = next((c for c in soa.columns if c.lower().replace(" ", "_") == "risk_type"), None)
+    cust_col = next((c for c in soa.columns if c.lower().replace(" ", "_") == "customer_type"), None)
+    zone_col = next((c for c in soa.columns if c.lower().replace(" ", "_") == "zone"), None)
+    bkt_col = next((c for c in soa.columns if c.lower().replace(" ", "_") == "bucket_group"), None)
+
+    meta_cols = [c for c in [risk_col, cust_col, zone_col, bkt_col] if c and c in soa.columns and c != "loan_number"]
+    overlap = [c for c in meta_cols if c in scored.columns and c != "loan_number"]
+    scored_clean = scored.drop(columns=overlap) if overlap else scored
+    df = scored_clean.merge(soa[["loan_number"] + meta_cols], on="loan_number", how="left")
+
+    has_risk_type = risk_col is not None
+    df["soa_risk_type"] = df[risk_col].fillna("Unassigned / NaN") if has_risk_type else "Unknown"
+
+    total_dues_cr = df["total_dues"].sum() / 1e7 if ("total_dues" in df.columns and df["total_dues"].sum()) else 1.0
 
     print("=" * 75)
     print("COMPARISON: SOA 'RISK TYPE' VS CALIBRATED RISK MODEL")
@@ -119,30 +138,30 @@ def evaluate_against_soa(soa_path: str | Path, scored_path: str | Path) -> None:
     if not has_risk_type:
         print("[*] SOA file has no 'Risk Type' column — accuracy metrics skipped.")
     else:
-        valid = df[df["Risk Type"].notna()].copy()
-        match_count = int((valid["risk_tier"] == valid["Risk Type"]).sum())
-        acc_valid = (valid["risk_tier"] == valid["Risk Type"]).mean() if len(valid) else 0.0
-        acc_total = (df["risk_tier"] == df["Risk Type"].fillna("Low")).mean()
+        valid = df[df[risk_col].notna()].copy()
+        match_count = int((valid["risk_tier"] == valid[risk_col]).sum())
+        acc_valid = (valid["risk_tier"] == valid[risk_col]).mean() if len(valid) else 0.0
+        acc_total = (df["risk_tier"] == df[risk_col].fillna("Low")).mean()
         print(f"[*] Exact match count        : {match_count:,} / {len(valid):,}")
         print(f"[*] Accuracy on valid tiers   : {acc_valid * 100:.2f}%")
         print(f"[*] Accuracy on full dataset  : {acc_total * 100:.2f}%")
 
-    if "Customer Type" in soa.columns:
+    if cust_col and cust_col in df.columns:
         print("\n" + "=" * 75)
         print("CUSTOMER TYPE & BOUNCE TYPE EVALUATION")
         print("=" * 75)
         if "customer_type" in df.columns:
             print("\n--- 1. BENCHMARK: SOA 'CUSTOMER TYPE' VS MODEL 'customer_type' ---")
-            ct_cust = pd.crosstab(df["Customer Type"].fillna("Unassigned / NaN"), df["customer_type"], margins=True, margins_name="Total")
+            ct_cust = pd.crosstab(df[cust_col].fillna("Unassigned / NaN"), df["customer_type"], margins=True, margins_name="Total")
             print(ct_cust)
-            valid_cust = df[df["Customer Type"].notna()].copy()
-            cust_match = int((valid_cust["Customer Type"] == valid_cust["customer_type"]).sum())
-            cust_acc = (valid_cust["Customer Type"] == valid_cust["customer_type"]).mean() if len(valid_cust) else 0.0
+            valid_cust = df[df[cust_col].notna()].copy()
+            cust_match = int((valid_cust[cust_col] == valid_cust["customer_type"]).sum())
+            cust_acc = (valid_cust[cust_col] == valid_cust["customer_type"]).mean() if len(valid_cust) else 0.0
             print(f"\n[*] Exact match count          : {cust_match:,} / {len(valid_cust):,}")
             print(f"[*] Accuracy on Customer Type   : {cust_acc * 100:.2f}%")
 
         if "bounce_type" in df.columns:
             print("\n--- 2. GRANULAR BOUNCE TYPE MATRIX (Customer Type vs bounce_type) ---")
-            ct_bounce = pd.crosstab(df["Customer Type"].fillna("Unassigned / NaN"), df["bounce_type"], margins=True, margins_name="Total")
+            ct_bounce = pd.crosstab(df[cust_col].fillna("Unassigned / NaN"), df["bounce_type"], margins=True, margins_name="Total")
             print(ct_bounce)
     print("=" * 75 + "\n")

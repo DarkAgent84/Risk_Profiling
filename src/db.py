@@ -94,17 +94,9 @@ def drop_column(table_name: str, column: str) -> None:
 
 
 def upload_raw_files(soa_path, mis_path) -> None:
-    """Upload the two raw CSVs into PostgreSQL as raw_soa_master / raw_mis_collections.
-
-    customer_type is intentionally stripped from the SOA data before upload —
-    it is not used anywhere in this pipeline, per policy.
-    """
+    """Upload the two raw CSVs into PostgreSQL as raw_soa_master / raw_mis_collections."""
     ensure_database_exists()
     soa = pd.read_csv(soa_path, low_memory=False)
-    soa_cols_normalized = {re.sub(r"[^a-zA-Z0-9_]+", "_", str(c).strip().lower()).strip("_"): c for c in soa.columns}
-    if "customer_type" in soa_cols_normalized:
-        soa = soa.drop(columns=[soa_cols_normalized["customer_type"]])
-        print("-> Excluding customer_type from SOA upload (not used in this pipeline)")
     upload_dataframe(soa, "raw_soa_master")
     upload_dataframe(pd.read_csv(mis_path, low_memory=False), "raw_mis_collections")
 

@@ -7,9 +7,12 @@ elsewhere — this file is the single source of truth for tuning.
 """
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # --- Paths ---
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
 RAW_DATA_DIR = BASE_DIR / "data" / "raw"
 PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"
 DEFAULT_OUTPUT_FILE = PROCESSED_DATA_DIR / "risk_scored_loans.csv"
