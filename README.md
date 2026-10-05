@@ -95,9 +95,11 @@ only imported when you actually run `sync-db` or `db-score`.
 
 ## How scoring works
 
-`customer_type` is not used anywhere in this pipeline — it's excluded on
-ingestion (`src/ingest.py`), never referenced in scoring, and never appears
-in output. All loans go through the same rule:
+`customer_type` is never used as an input feature in risk scoring to prevent
+target leakage — all loans are evaluated under the same objective escalation
+rules. An algorithmic 4-class `customer_type` is independently computed by the
+engine and included in the output alongside `soa_customer_type` for audit and
+evaluation. All loans go through the same rule:
 
 1. **Raw score (0–1)** — one uniform bucket/DPD escalation rule applies to
    every loan (see `src/scoring.py`):
