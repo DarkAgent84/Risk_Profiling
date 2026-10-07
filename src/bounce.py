@@ -61,12 +61,15 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
     c3 = _col_numeric(df, "charges_3")
     c_pay = _col_numeric(df, "charges_payable")
     dpd = _col_numeric(df, "dpd")
-    dues = _col_numeric(df, "total_dues")
+    dues = _col_numeric(df, "overdue_dues") if "overdue_dues" in df.columns else _col_numeric(df, "total_dues")
     rejected_receipts = _col_numeric(df, "rejected_receipts")
     rejection_rate = _col_numeric(df, "rejection_rate")
 
     bkt = df["bucket_group"].astype(str).str.strip().str.lower() if "bucket_group" in df.columns else pd.Series("", index=df.index)
-    has_collector = df["app_user_id"].notna() if "app_user_id" in df.columns else pd.Series(False, index=df.index)
+    has_collector_series = df["app_user_id"].notna() if "app_user_id" in df.columns else pd.Series(False, index=df.index)
+    # If app_user_id is universally populated across the portfolio (>90%), it represents branch/agent assignment,
+    # not a collection referral for default. Only treat as collection escalation when assigned to a minority subset.
+    has_collector = pd.Series(False, index=df.index) if has_collector_series.mean() > 0.90 else has_collector_series
     product = df["product_name"].astype(str).str.upper() if "product_name" in df.columns else pd.Series("", index=df.index)
     risk_type = df["risk_type"].astype(str).str.strip().str.lower() if "risk_type" in df.columns else pd.Series("", index=df.index)
 

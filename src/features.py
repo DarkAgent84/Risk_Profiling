@@ -27,7 +27,18 @@ def build_behavior_features(mis: pd.DataFrame) -> pd.DataFrame:
     status_cancelled = status.str.contains(config.CANCELLED_STATUS_KEYWORD, regex=False)
     count_rejected = (mis["rejection_count"] > 0) if "rejection_count" in mis.columns else False
     mis["is_rejected"] = (status_rejected | status_cancelled | count_rejected).astype(int)
-    mis["is_partial"] = (ptype == config.PARTIAL_PAYMENT_KEYWORD).astype(int)
+
+    # An installment is truly partial only if it paid less than the installment due.
+    # When total_amount_collected equals or exceeds emi_pemi_dues, the borrower paid
+    # the complete installment (even if the app labeled it 'Part payment' against total cumulative dues).
+    is_part_type = (ptype == config.PARTIAL_PAYMENT_KEYWORD)
+    if "total_amount_collected" in mis.columns and "emi_pemi_dues" in mis.columns:
+        collected = pd.to_numeric(mis["total_amount_collected"], errors="coerce").fillna(0)
+        pemi_due = pd.to_numeric(mis["emi_pemi_dues"], errors="coerce").fillna(0)
+        paid_full = (pemi_due > 0) & (collected >= pemi_due * 0.95)
+        mis["is_partial"] = (is_part_type & ~paid_full).astype(int)
+    else:
+        mis["is_partial"] = is_part_type.astype(int)
 
     agg = {"is_rejected": ["count", "sum", "mean"], "is_partial": "mean"}
     if "total_amount_collected" in mis.columns:

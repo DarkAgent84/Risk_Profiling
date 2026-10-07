@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 import config
@@ -156,6 +157,20 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     for col in numeric_amount_cols:
         if col in soa.columns:
             soa[col] = pd.to_numeric(soa[col], errors="coerce").fillna(0)
+
+    # Overdue dues calculation:
+    # Some lending systems (e.g. Client 2) bill gross cumulative dues including the current cycle's EMI
+    # rather than only delinquent/overdue arrears.
+    # For clean loans (Bucket 0 / 0 DPD) where total_dues matches current installment, overdue_dues = max(0, total_dues - emi).
+    emi_val = pd.to_numeric(soa.get("emi_amount", 0), errors="coerce").fillna(0)
+    bkt_str = soa.get("bucket", "").astype(str).str.strip().str.lower()
+    dpd_val = soa.get("dpd", pd.Series(0, index=soa.index))
+    bkt_is_zero = bkt_str.isin(["0", "0.0"]) | (dpd_val <= 0)
+    dues_matches_emi = bkt_is_zero & (soa["total_dues"] > 0) & (soa["total_dues"] <= emi_val * 1.05)
+    if dues_matches_emi.any():
+        soa["overdue_dues"] = np.where(dues_matches_emi, np.maximum(0.0, soa["total_dues"] - emi_val), soa["total_dues"])
+    else:
+        soa["overdue_dues"] = soa["total_dues"]
 
     # Dates used for months-on-books (MOB) and the matured-overdue check
     for col in ["disbursal_date", "cycle_date", "emi_due_date"]:

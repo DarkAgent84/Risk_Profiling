@@ -33,24 +33,23 @@ def _raw_score(row: pd.Series) -> float:
     """Uniform bucket/DPD escalation rule, applied the same way to every loan."""
     bkt = str(row.get("bucket_group", "")).strip().lower()
     dpd = float(row.get("dpd", 0) or 0)
-    dues = float(row.get("total_dues", 0) or 0)
+    dues = float(row.get("overdue_dues", row.get("total_dues", 0)) or 0)
     charges = float(row.get("charges_payable", 0) or 0)
     charges2 = float(row.get("charges_2", 0) or 0)
-    receipts = float(row.get("total_receipts", 0) or 0)
     beh_score = float(row.get("behavior_score", 0) or 0)
     dpd_norm = float(row.get("dpd_norm", 0) or 0)
     dues_norm = float(row.get("dues_norm", 0) or 0)
 
     # 1. Delinquent bucket, or any positive DPD: escalate.
     if bkt in ESCALATED_BUCKETS or dpd > 0:
-        score = max(0.70, 0.40 + 0.30 * dpd_norm + 0.15 * dues_norm + 0.15 * beh_score)
+        score = max(0.40, 0.40 + 0.30 * dpd_norm + 0.15 * dues_norm + 0.15 * beh_score)
         return min(score, 1.0)
 
-    # 2. Bucket 0 (current) but still carrying dues/charges/receipt activity.
-    if dues > 0 or charges > 0 or receipts > 0 or charges2 > 0:
+    # 2. Bucket 0 (current) but still carrying overdue dues or charges
+    if dues > 0 or charges > 0 or charges2 > 0:
         return 0.70
 
-    # 3. Clean: bucket 0, nothing owed, no activity.
+    # 3. Clean: bucket 0, nothing overdue, no charges.
     return 0.05
 
 
@@ -78,9 +77,10 @@ def score_portfolio(soa: pd.DataFrame, behavior: pd.DataFrame, dpd_cap: float = 
 
     # Normalization
     df["dpd_norm"] = np.clip(df["dpd"] / float(dpd_cap), 0.0, 1.0)
-    max_dues = df["total_dues"].max()
+    dues_col = "overdue_dues" if "overdue_dues" in df.columns else "total_dues"
+    max_dues = df[dues_col].max()
     max_log_dues = np.log1p(max_dues) if max_dues > 0 else 1.0
-    df["dues_norm"] = np.log1p(np.maximum(0, df["total_dues"])) / max_log_dues
+    df["dues_norm"] = np.log1p(np.maximum(0, df[dues_col])) / max_log_dues
 
     # Behavioral friction
     worked_behavior = (
