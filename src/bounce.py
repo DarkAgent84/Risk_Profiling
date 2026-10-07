@@ -43,11 +43,15 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
 
     # Dates and Months on Books (MOB)
     today = pd.Timestamp.today().normalize()
-    disbursal = pd.to_datetime(df.get("disbursal_date"), errors="coerce", dayfirst=True)
-    cycle = pd.to_datetime(df.get("cycle_date"), errors="coerce", dayfirst=True).fillna(today)
-    emi_due = pd.to_datetime(df.get("emi_due_date"), errors="coerce", dayfirst=True)
+    has_disbursal = "disbursal_date" in df.columns and df["disbursal_date"].notna().any()
+    has_cycle = "cycle_date" in df.columns and df["cycle_date"].notna().any()
+    has_emi_due = "emi_due_date" in df.columns and df["emi_due_date"].notna().any()
 
-    if disbursal.notna().any():
+    disbursal = pd.to_datetime(df["disbursal_date"], errors="coerce", dayfirst=True) if has_disbursal else pd.Series(pd.NaT, index=df.index)
+    cycle = pd.to_datetime(df["cycle_date"], errors="coerce", dayfirst=True).fillna(today) if has_cycle else pd.Series(today, index=df.index)
+    emi_due = pd.to_datetime(df["emi_due_date"], errors="coerce", dayfirst=True) if has_emi_due else pd.Series(pd.NaT, index=df.index)
+
+    if has_disbursal and disbursal.notna().any():
         mob = _months_between(disbursal, cycle)
     else:
         mob = pd.Series(np.nan, index=df.index)
@@ -85,8 +89,8 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
     # 1. customer_type (4-class Banking Benchmark - Algorithmic)
     # ---------------------------------------------------------
     matured_flag = df.get("matured_overdue", pd.Series(False, index=df.index))
-    matured_mask = (emi_due.notna() & cycle.notna() & (emi_due < cycle)) | matured_flag
-    mob3_mask = product.isin(["SMALL TICKET LAP", "HOME LOAN"]) & mob.isin([2, 3, 4, 5]) & (~matured_mask)
+    matured_mask = (has_cycle & emi_due.notna() & cycle.notna() & (emi_due < cycle)) | matured_flag
+    mob3_mask = has_disbursal & product.isin(["SMALL TICKET LAP", "HOME LOAN"]) & mob.isin([2, 3, 4, 5]) & (~matured_mask)
     ever_mask = has_bounced & (~matured_mask) & (~mob3_mask)
 
     cust_type_pred = pd.Series("Never Bounce", index=df.index, dtype=object)
@@ -104,11 +108,12 @@ def add_bounce_type(df: pd.DataFrame) -> pd.DataFrame:
     # ---------------------------------------------------------
     bounce_granular = pd.Series("Never Bounced", index=df.index, dtype=object)
     bounce_granular[has_bounced] = "Ever Bounced"
-    bounce_granular[has_bounced & (mob >= 7)] = "7+ MOB"
-    bounce_granular[has_bounced & (mob == 6)] = "6 MOB"
-    bounce_granular[has_bounced & (mob == 5)] = "5 MOB"
-    bounce_granular[has_bounced & (mob == 4)] = "4 MOB"
-    bounce_granular[has_bounced & (mob == 3)] = "3 MOB"
+    if has_disbursal:
+        bounce_granular[has_bounced & (mob >= 7)] = "7+ MOB"
+        bounce_granular[has_bounced & (mob == 6)] = "6 MOB"
+        bounce_granular[has_bounced & (mob == 5)] = "5 MOB"
+        bounce_granular[has_bounced & (mob == 4)] = "4 MOB"
+        bounce_granular[has_bounced & (mob == 3)] = "3 MOB"
     bounce_granular[rejection_rate >= config.ALWAYS_BOUNCED_RATE] = "Always Bounced"
 
     df["bounce_type"] = bounce_granular

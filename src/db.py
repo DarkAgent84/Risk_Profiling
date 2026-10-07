@@ -14,7 +14,7 @@ import config
 
 try:
     import psycopg2
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine, text, types as satypes
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "Database features require extra packages. Install with:\n"
@@ -62,12 +62,116 @@ def ensure_database_exists() -> None:
     conn.close()
 
 
-def upload_dataframe(df: pd.DataFrame, table_name: str) -> None:
-    """Fast bulk load via COPY, replacing the table."""
-    engine = get_engine()
+def infer_column_type(col_name: str, series: pd.Series):
+    """
+    Intelligently infer PostgreSQL/SQLAlchemy column type from column name and series data.
+    Ensures empty columns don't erroneously become double precision, dates are proper DATE/TIMESTAMP,
+    identifiers remain TEXT, and numbers are correctly sized NUMERIC/BIGINT.
+    """
+    clean_name = col_name.lower().strip()
+
+    # 1. Geographic Coordinates
+    if any(p == clean_name or clean_name.endswith(f"_{p}") for p in ["latitude", "longitude", "lat", "lon"]):
+        return satypes.Numeric(10, 7)
+
+    # 2. Rates / Scores / Percentages
+    if any(p in clean_name for p in ["rate", "score", "percentage", "pct", "waiver"]):
+        return satypes.Numeric(8, 4)
+
+    # 3. Dates & Datetimes
+    date_patterns = ["date", "time", "due_date", "submit_date", "disbursal", "cycle"]
+    if any(p in clean_name for p in date_patterns):
+        non_null = series.dropna().astype(str).str.strip()
+        non_null = non_null[~non_null.isin(["", "nan", "None", "NULL", "NaT"])]
+        if len(non_null) > 0:
+            sample = non_null.iloc[0]
+            if ":" in sample or " " in sample:
+                return satypes.DateTime()
+        return satypes.Date()
+
+    # 4. Boolean flags
+    if any(p in clean_name for p in ["is_", "has_", "flag", "never_worked", "matured_overdue", "active_or_inactive"]):
+        return satypes.Boolean()
+
+    # 5. Identifier / text / categorical columns (PRIORITIZE text for IDs, relations, codes, addresses)
+    text_patterns = [
+        "name", "address", "relation", "email", "mobile", "phone", "pan", "image",
+        "url", "map", "status", "mode", "type", "zone", "branch", "group", "product",
+        "tier", "action", "remark", "comment", "user_id", "app_user", "code", "ifsc",
+        "receipt_number", "receipt_no", "loan_number", "account_number", "bank_a_c",
+        "instrument_number", "transaction_id", "pincode", "priority", "area", "bucket",
+        "description", "notes", "tag"
+    ]
+    if any(p in clean_name for p in text_patterns) or clean_name == "id" or clean_name.endswith("_id") or "_id_" in clean_name:
+        return satypes.Text()
+
+    # 6. Serial numbers / integer counters
+    if clean_name in ["sr_no", "serial_no", "row_num"]:
+        return satypes.BigInteger()
+
+    # 7. Amounts, charges, dues, balances, counts
+    amount_patterns = [
+        "due", "dues", "amount", "charge", "charges", "balance", "penal", "bcc",
+        "collected", "dpd", "count", "receipts", "total"
+    ]
+    if any(p in clean_name for p in amount_patterns):
+        return satypes.Numeric(15, 2)
+
+    # Fallback inspecting series content
+    non_null = series.dropna()
+    if len(non_null) == 0:
+        return satypes.Text()
+
+    if pd.api.types.is_bool_dtype(series):
+        return satypes.Boolean()
+    if pd.api.types.is_integer_dtype(series):
+        return satypes.BigInteger()
+    if pd.api.types.is_float_dtype(series):
+        return satypes.Numeric(15, 2)
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return satypes.DateTime()
+
+    return satypes.Text()
+
+
+def prepare_dataframe_for_db(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Clean column names and cast/format values according to inferred types for PostgreSQL COPY."""
     df_clean = df.copy()
     df_clean.columns = [re.sub(r"[^a-zA-Z0-9_]+", "_", str(c).strip().lower()).strip("_") or "col" for c in df_clean.columns]
-    df_clean.head(0).to_sql(table_name, engine, if_exists="replace", index=False)
+
+    dtypes = {}
+    for col in df_clean.columns:
+        sql_type = infer_column_type(col, df_clean[col])
+        dtypes[col] = sql_type
+
+        # Format values cleanly for COPY
+        if isinstance(sql_type, (satypes.Date, satypes.DateTime)):
+            df_clean[col] = pd.to_datetime(df_clean[col], errors="coerce", dayfirst=True)
+            if isinstance(sql_type, satypes.Date):
+                df_clean[col] = df_clean[col].dt.strftime("%Y-%m-%d").replace("NaT", None)
+            else:
+                df_clean[col] = df_clean[col].dt.strftime("%Y-%m-%d %H:%M:%S").replace("NaT", None)
+        elif isinstance(sql_type, satypes.Numeric):
+            df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
+        elif isinstance(sql_type, satypes.BigInteger):
+            df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce").astype("Int64")
+        elif isinstance(sql_type, satypes.Boolean):
+            df_clean[col] = df_clean[col].map({
+                1: True, 0: False, "1": True, "0": False,
+                True: True, False: False, "True": True, "False": False, "true": True, "false": False
+            })
+        elif isinstance(sql_type, satypes.Text):
+            df_clean[col] = df_clean[col].astype(str).str.strip()
+            df_clean[col] = df_clean[col].replace({"nan": None, "None": None, "NULL": None, "NA": None, "": None})
+
+    return df_clean, dtypes
+
+
+def upload_dataframe(df: pd.DataFrame, table_name: str) -> None:
+    """Fast bulk load via COPY, automatically detecting accurate schema datatypes."""
+    engine = get_engine()
+    df_clean, dtypes = prepare_dataframe_for_db(df)
+    df_clean.head(0).to_sql(table_name, engine, if_exists="replace", index=False, dtype=dtypes)
 
     conn = _get_raw_connection()
     conn.autocommit = True
@@ -78,7 +182,7 @@ def upload_dataframe(df: pd.DataFrame, table_name: str) -> None:
     cur.copy_expert(f'COPY "{table_name}" FROM STDIN WITH (FORMAT csv, DELIMITER E\'\\t\', NULL \'\\N\');', buf)
     cur.close()
     conn.close()
-    print(f"[OK] Uploaded {len(df_clean):,} rows to '{table_name}'")
+    print(f"[OK] Uploaded {len(df_clean):,} rows to '{table_name}' with verified column datatypes")
 
 
 def fetch_table(table_name: str) -> pd.DataFrame:

@@ -174,4 +174,17 @@ Categorizes loans into the specific 8-tier operational attribute:
 
 Running `python main.py evaluate` prints the cross-tabulation and evaluation metrics for both columns.
 
+## Adaptive Schema Ingestion & Multi-Client Support
+
+The pipeline automatically adapts to varying portfolio formats (such as Client 1 and Client 2):
+
+1. **Intelligent Datatype Inference for Database Sync (`sync-db`)**:
+   - **Identifiers & Text**: Empty or sparse columns (`co_applicant_2_address`, `action`, etc.), phone numbers, and alphanumeric codes (`user_id`, `instrument_collected_by_id`) are preserved as SQL `TEXT` rather than defaulting to `DOUBLE PRECISION`.
+   - **Dates & Timestamps**: Automatically parses ISO and day-first date strings, assigning `TIMESTAMP WITHOUT TIME ZONE` to receipt logs and `DATE` to daily loan markers.
+   - **Coordinates & Financials**: `latitude`/`longitude` map to `NUMERIC(10, 7)`; financial amounts, dues, and charges map to `NUMERIC(15, 2)`.
+
+2. **Dynamic Delinquency & Bucket Normalization**:
+   - If an SOA file provides `Bucket` but lacks an explicit `DPD` column (as in Client 2), the engine dynamically maps buckets (`0`, `1`, `2`, `3`, `3  Above`) to standardized DPDs and bucket groups (`0`, `1-29`, `30-59`, `60-89`, `90+`) without truncating string labels.
+   - Robust date validation ensures absent `cycle_date` or `disbursal_date` fields default safely without runtime exceptions or artificial tenure lapses.
+
 

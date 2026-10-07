@@ -59,25 +59,105 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     soa = soa.copy()
     soa.columns = [normalize_column_name(c) for c in soa.columns]
 
-    # customer_type is retained for audit/evaluation, but never used as an input to risk scoring.
-    if "customer_type" in soa.columns:
-        soa["customer_type"] = soa["customer_type"].astype(str).str.strip()
-        soa["customer_type"] = soa["customer_type"].replace({"nan": None, "None": None})
-
-    missing = [c for c in ["loan_number", "dpd", "total_dues"] if c not in soa.columns]
-    if missing:
-        sys.exit(f"SOA data missing required column(s): {missing}")
+    if "loan_number" not in soa.columns:
+        sys.exit("SOA data missing required column: 'loan_number'")
 
     soa = _drop_blank_loan_numbers(soa, "SOA")
     soa["loan_number"] = soa["loan_number"].astype(str).str.strip()
-    soa["dpd"] = pd.to_numeric(soa["dpd"], errors="coerce").fillna(0)
-    soa["total_dues"] = pd.to_numeric(soa["total_dues"], errors="coerce").fillna(0)
 
-    for col in ["total_loan_outstanding_amount", "bucket", "emi_amount", "loan_amount", "charges_payable", "charges_2"]:
+    # customer_type is retained for audit/evaluation, but never used as an input to risk scoring.
+    if "customer_type" in soa.columns:
+        soa["customer_type"] = soa["customer_type"].astype(str).str.strip()
+        soa["customer_type"] = soa["customer_type"].replace({"nan": None, "None": None, "": None})
+
+    # Total dues handling (primary: total_dues, fallback: emi_pemi_dues)
+    if "total_dues" in soa.columns:
+        soa["total_dues"] = pd.to_numeric(soa["total_dues"], errors="coerce").fillna(0)
+    elif "emi_pemi_dues" in soa.columns:
+        soa["total_dues"] = pd.to_numeric(soa["emi_pemi_dues"], errors="coerce").fillna(0)
+    else:
+        soa["total_dues"] = 0.0
+
+    # DPD and Bucket Group handling (in Client 2, DPD may not be present, but Bucket is)
+    if "dpd" not in soa.columns:
+        if "bucket" in soa.columns:
+            print("-> Note: 'dpd' column not in SOA. Deriving 'dpd' and 'bucket_group' from 'bucket'...")
+            def _bucket_to_dpd(b):
+                b_str = str(b).strip().lower()
+                if b_str in ["0", "0.0"]:
+                    return 0.0
+                elif b_str in ["1", "1.0"]:
+                    return 15.0
+                elif b_str in ["2", "2.0"]:
+                    return 45.0
+                elif b_str in ["3", "3.0"]:
+                    return 75.0
+                elif "above" in b_str or "+" in b_str:
+                    return 90.0
+                try:
+                    num = float(b_str)
+                    if num == 0: return 0.0
+                    elif num == 1: return 15.0
+                    elif num == 2: return 45.0
+                    elif num == 3: return 75.0
+                    elif num >= 4: return 90.0
+                except ValueError:
+                    pass
+                return 0.0
+
+            soa["dpd"] = soa["bucket"].apply(_bucket_to_dpd)
+        else:
+            soa["dpd"] = 0.0
+    else:
+        soa["dpd"] = pd.to_numeric(soa["dpd"], errors="coerce").fillna(0)
+
+    # Bucket group standardization (used for risk scoring escalation)
+    if "bucket_group" not in soa.columns:
+        if "bucket" in soa.columns:
+            def _bucket_to_group(b):
+                b_str = str(b).strip().lower()
+                if b_str in ["0", "0.0"]:
+                    return "0"
+                elif b_str in ["1", "1.0"]:
+                    return "1-29"
+                elif b_str in ["2", "2.0"]:
+                    return "30-59"
+                elif b_str in ["3", "3.0"]:
+                    return "60-89"
+                elif "above" in b_str or "+" in b_str:
+                    return "90+"
+                try:
+                    num = float(b_str)
+                    if num == 0: return "0"
+                    elif num == 1: return "1-29"
+                    elif num == 2: return "30-59"
+                    elif num == 3: return "60-89"
+                    elif num >= 4: return "90+"
+                except ValueError:
+                    pass
+                return "0"
+
+            soa["bucket_group"] = soa["bucket"].apply(_bucket_to_group)
+        else:
+            soa["bucket_group"] = soa["dpd"].apply(
+                lambda d: "0" if d <= 0 else ("1-29" if d < 30 else ("30-59" if d < 60 else ("60-89" if d < 90 else "90+")))
+            )
+
+    # Preserve bucket as string so categorical values ('3  Above', '0', etc.) are not destroyed by to_numeric
+    if "bucket" in soa.columns:
+        soa["bucket"] = soa["bucket"].astype(str).str.strip().replace({"nan": "0", "None": "0", "": "0"})
+
+    # Numeric amount fields
+    numeric_amount_cols = [
+        "total_loan_outstanding_amount", "emi_amount", "loan_amount",
+        "loan_principle_balance_amount", "charges_payable", "charges_2",
+        "charges_3", "settlement_amount", "emi_pemi_dues"
+    ]
+    for col in numeric_amount_cols:
         if col in soa.columns:
             soa[col] = pd.to_numeric(soa[col], errors="coerce").fillna(0)
 
-    # Dates used for months-on-books (MOB) and the matured-overdue check below.
+    # Dates used for months-on-books (MOB) and the matured-overdue check
     for col in ["disbursal_date", "cycle_date", "emi_due_date"]:
         if col in soa.columns:
             soa[col] = pd.to_datetime(soa[col], errors="coerce", dayfirst=True)
@@ -90,19 +170,40 @@ def prepare_mis(mis: pd.DataFrame) -> pd.DataFrame:
     mis = mis.copy()
     mis.columns = [normalize_column_name(c) for c in mis.columns]
 
-    missing = [c for c in ["loan_number", "instrument_status", "payment_type"] if c not in mis.columns]
-    if missing:
-        sys.exit(f"MIS data missing required column(s): {missing}")
+    if "loan_number" not in mis.columns:
+        sys.exit("MIS data missing required column: 'loan_number'")
 
     mis = _drop_blank_loan_numbers(mis, "MIS")
     mis["loan_number"] = mis["loan_number"].astype(str).str.strip()
-    if "total_amount_collected" in mis.columns:
-        mis["total_amount_collected"] = pd.to_numeric(mis["total_amount_collected"], errors="coerce").fillna(0)
-    if "payment_date" in mis.columns:
-        mis["payment_date"] = pd.to_datetime(mis["payment_date"], errors="coerce", dayfirst=True)
-    # Rejection Count is blank for never-rejected receipts and 1-5 for receipts
-    # that were rejected at least once (even if later re-submitted and approved).
-    # This is what makes "ever rejected" detectable — see features.py.
+
+    # Clean text status fields (strip whitespace and handle empty values)
+    if "instrument_status" not in mis.columns:
+        mis["instrument_status"] = ""
+    else:
+        mis["instrument_status"] = mis["instrument_status"].astype(str).str.strip().replace({"nan": "", "None": ""})
+
+    if "payment_type" not in mis.columns:
+        mis["payment_type"] = ""
+    else:
+        mis["payment_type"] = mis["payment_type"].astype(str).str.strip().replace({"nan": "", "None": ""})
+
+    # Numeric collections and charges
+    amount_cols = [
+        "total_amount_collected", "total_dues", "charges_payable", "penal",
+        "bcc", "emi_pemi_dues", "total_emi_due", "cash_handling_charges",
+        "legal_charges", "foreclosure_charges", "charge_7", "charge_8",
+        "charge_9", "charge_10"
+    ]
+    for col in amount_cols:
+        if col in mis.columns:
+            mis[col] = pd.to_numeric(mis[col], errors="coerce").fillna(0)
+
+    # Dates
+    for col in ["payment_date", "submit_date", "business_date", "instrument_date"]:
+        if col in mis.columns:
+            mis[col] = pd.to_datetime(mis[col], errors="coerce", dayfirst=True)
+
+    # Rejection Count
     if "rejection_count" in mis.columns:
         mis["rejection_count"] = pd.to_numeric(mis["rejection_count"], errors="coerce").fillna(0)
 

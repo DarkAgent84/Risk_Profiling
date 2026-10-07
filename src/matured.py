@@ -21,14 +21,20 @@ def add_matured_overdue(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     if "emi_due_date" not in df.columns or "cycle_date" not in df.columns:
-        print("[WARN] No 'Emi due date' / 'Cycle Date' column in SOA — matured_overdue skipped (defaulting to False).")
+        df["matured_overdue"] = False
+        return df
+
+    cycle_series = pd.to_datetime(df["cycle_date"], errors="coerce", dayfirst=True)
+    emi_series = pd.to_datetime(df["emi_due_date"], errors="coerce", dayfirst=True)
+
+    if not cycle_series.notna().any() or not emi_series.notna().any():
         df["matured_overdue"] = False
         return df
 
     dpd = pd.to_numeric(df.get("dpd", 0), errors="coerce").fillna(0)
     dues = pd.to_numeric(df.get("total_dues", 0), errors="coerce").fillna(0)
 
-    tenure_lapsed = df["emi_due_date"].notna() & df["cycle_date"].notna() & (df["emi_due_date"] < df["cycle_date"])
+    tenure_lapsed = emi_series.notna() & cycle_series.notna() & (emi_series < cycle_series)
     still_owing = (dpd > 0) | (dues > 0)
 
     df["matured_overdue"] = tenure_lapsed & still_owing
