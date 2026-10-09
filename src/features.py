@@ -21,10 +21,12 @@ def build_behavior_features(mis: pd.DataFrame) -> pd.DataFrame:
     mis = mis.copy()
 
     status = mis["instrument_status"].astype(str).str.strip().str.lower()
+    rstatus = mis["receipt_status"].astype(str).str.strip().str.lower() if "receipt_status" in mis.columns else pd.Series("", index=mis.index)
     ptype = mis["payment_type"].astype(str).str.strip().str.lower()
 
-    status_rejected = status.str.contains("|".join(config.REJECTED_STATUS_KEYWORDS), regex=True)
-    status_cancelled = status.str.contains(config.CANCELLED_STATUS_KEYWORD, regex=False)
+    reject_pattern = "|".join(config.REJECTED_STATUS_KEYWORDS)
+    status_rejected = status.str.contains(reject_pattern, regex=True) | rstatus.str.contains(reject_pattern, regex=True)
+    status_cancelled = status.str.contains(config.CANCELLED_STATUS_KEYWORD, regex=False) | rstatus.str.contains(config.CANCELLED_STATUS_KEYWORD, regex=False)
     count_rejected = (mis["rejection_count"] > 0) if "rejection_count" in mis.columns else False
     mis["is_rejected"] = (status_rejected | status_cancelled | count_rejected).astype(int)
 

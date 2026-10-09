@@ -18,8 +18,12 @@ from src.scoring import score_portfolio
 from src.report import print_portfolio_summary, evaluate_against_soa
 
 OUTPUT_COLUMNS = [
-    "loan_number", "dpd", "bucket", "total_dues", "overdue_dues", "total_loan_outstanding_amount",
-    "product_name", "zone", "soa_customer_type", "customer_type", "risk_type", "npa_tag",
+    "loan_number", "branch_id", "pincode", "dpd", "bucket", "total_dues", "overdue_dues",
+    "emi_amount", "emi_pemi_dues", "emi_due_date",
+    "loan_principle_balance_amount", "total_loan_outstanding_amount",
+    "product_name", "zone", "priority", "active_or_inactive_1_or_0",
+    "app_user_id", "app_user_s_full_name",
+    "soa_customer_type", "customer_type", "risk_type", "npa_tag",
     "never_worked", "total_receipts", "rejected_receipts", "rejection_rate",
     "partial_payment_rate", "total_collected", "last_payment_date",
     "disbursal_date", "bounce_type", "matured_overdue",
@@ -29,13 +33,14 @@ OUTPUT_COLUMNS = [
 
 def cmd_score(args) -> None:
     soa_path, mis_path = args.soa, args.mis
+    client = getattr(args, "client", None)
     if not soa_path or not mis_path:
-        default_soa, default_mis = find_raw_files()
+        default_soa, default_mis = find_raw_files(client)
         soa_path = soa_path or default_soa
         mis_path = mis_path or default_mis
     if not soa_path or not mis_path:
         sys.exit("Error: could not find SOA and/or MIS CSV files in data/raw. "
-                  "Pass them explicitly with --soa and --mis.")
+                  "Pass them explicitly with --soa and --mis, or specify --client.")
 
     print("=" * 55)
     print("   COLLECTIONS RISK PROFILING — SCORING RUN")
@@ -76,7 +81,7 @@ def cmd_evaluate(args) -> None:
 
     soa_path = args.soa
     if not soa_path:
-        soa_path, _ = find_raw_files()
+        soa_path, _ = find_raw_files(getattr(args, "client", None))
     from pathlib import Path
     scored_path = Path(args.scored) if args.scored else config.DEFAULT_OUTPUT_FILE
     if not soa_path or not scored_path.exists():
@@ -90,8 +95,9 @@ def cmd_evaluate(args) -> None:
 def cmd_sync_db(args) -> None:
     from src.db import upload_raw_files
     soa_path, mis_path = args.soa, args.mis
+    client = getattr(args, "client", None)
     if not soa_path or not mis_path:
-        default_soa, default_mis = find_raw_files()
+        default_soa, default_mis = find_raw_files(client)
         soa_path = soa_path or default_soa
         mis_path = mis_path or default_mis
     if not soa_path or not mis_path:
@@ -146,6 +152,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_score = sub.add_parser("score", help="Run the risk scoring pipeline")
+    p_score.add_argument("--client", type=str, default=None, help="Client portfolio name ('client2' or 'client1')")
     p_score.add_argument("--soa", type=str, default=None, help="Path to SOA master CSV")
     p_score.add_argument("--mis", type=str, default=None, help="Path to MIS collection CSV")
     p_score.add_argument("--out", type=str, default="risk_scored_loans.csv",
@@ -153,12 +160,14 @@ def main() -> None:
     p_score.set_defaults(func=cmd_score)
 
     p_eval = sub.add_parser("evaluate", help="Compare scored output against SOA 'Risk Type' and 'Customer Type'")
+    p_eval.add_argument("--client", type=str, default=None, help="Client portfolio name ('client2' or 'client1')")
     p_eval.add_argument("--soa", type=str, default=None, help="Path to raw SOA CSV")
     p_eval.add_argument("--scored", type=str, default=None, help="Path to scored loans CSV")
     p_eval.add_argument("--from-db", action="store_true", help="Evaluate directly from PostgreSQL database tables")
     p_eval.set_defaults(func=cmd_evaluate)
 
     p_db = sub.add_parser("sync-db", help="Upload raw SOA + MIS CSVs to PostgreSQL")
+    p_db.add_argument("--client", type=str, default=None, help="Client portfolio name ('client2' or 'client1')")
     p_db.add_argument("--soa", type=str, default=None)
     p_db.add_argument("--mis", type=str, default=None)
     p_db.set_defaults(func=cmd_sync_db)

@@ -30,18 +30,22 @@ That's it — no bridge files, no duplicate config, no dead code paths.
 ```bash
 pip install -r requirements.txt
 
-# Drop your SOA master CSV and MIS collection CSV into data/raw/, then:
+# Run risk scoring (automatically discovers Client 2 CSVs in data/raw/):
 python main.py score
 
-# Compare model tiers against the SOA's legacy "Risk Type" column:
+# Or explicitly specify client portfolio:
+python main.py score --client client2                 # Runs Client 2 portfolio
+python main.py score --client client1                 # Runs Client 1 portfolio
+
+# Compare model tiers against the SOA's legacy "Risk Type" column (if present):
 python main.py evaluate
 ```
 
 Custom paths:
 
 ```bash
-python main.py score --soa data/raw/soa.csv --mis data/raw/mis.csv --out my_scored.csv
-python main.py evaluate --soa data/raw/soa.csv --scored data/processed/my_scored.csv
+python main.py score --soa data/raw/Client2_Customer_Data.csv --mis data/raw/Client2_Collection_Data.csv --out Client2_Scored.csv
+python main.py evaluate --soa data/raw/Client2_Customer_Data.csv --scored data/processed/Client2_Scored.csv
 ```
 
 ## Optional: run the whole pipeline through PostgreSQL / pgAdmin
@@ -67,7 +71,8 @@ if unset.
 **2. Upload your raw CSVs into PostgreSQL:**
 
 ```bash
-python main.py sync-db --soa data/raw/Customer_Data.csv --mis data/raw/Collection_Data.csv
+python main.py sync-db                          # Auto-discovers Client 2 files
+python main.py sync-db --client client1         # Or upload Client 1
 ```
 
 This creates the database (if it doesn't exist yet) and two tables:

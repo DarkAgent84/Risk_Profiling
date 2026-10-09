@@ -19,15 +19,47 @@ def normalize_column_name(col: str) -> str:
     return col.strip("_")
 
 
-def find_raw_files() -> Tuple[Optional[Path], Optional[Path]]:
-    """Look for an SOA master file and an MIS collections file in data/raw (or project root)."""
+def find_raw_files(client: Optional[str] = None) -> Tuple[Optional[Path], Optional[Path]]:
+    """Look for an SOA master file and an MIS collections file in data/raw (or project root).
+
+    Supports optional client specification: 'client2' (default when Client2 files are present)
+    or 'client1', as well as generic auto-discovery.
+    """
     search_dirs = [config.RAW_DATA_DIR, config.BASE_DIR]
+
+    if client:
+        c_lower = client.lower().strip()
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            # Look for files matching the client name
+            c_soa = list(d.glob(f"*{c_lower}*customer*.csv")) + list(d.glob(f"*{c_lower}*soa*.csv"))
+            c_mis = list(d.glob(f"*{c_lower}*collection*.csv")) + list(d.glob(f"*{c_lower}*mis*.csv"))
+            # Also check client subdirectories (e.g. data/raw/Client1/)
+            for sub in d.glob("*"):
+                if sub.is_dir() and c_lower in sub.name.lower():
+                    c_soa += list(sub.glob("*customer*.csv")) + list(sub.glob("*soa*.csv"))
+                    c_mis += list(sub.glob("*collection*.csv")) + list(sub.glob("*mis*.csv"))
+            soa = c_soa[0] if c_soa else None
+            mis = c_mis[0] if c_mis else None
+            if soa and mis:
+                return soa, mis
+
     soa_file, mis_file = None, None
 
+    # Priority 1: Check data/raw for Client 2 files directly
     for d in search_dirs:
         if not d.exists():
             continue
-        candidates = sorted(d.glob("*.csv"), key=lambda p: ("copy" in p.name.lower(), p.name))
+        # Sort so client2 files are picked first when present in data/raw
+        candidates = sorted(
+            d.glob("*.csv"),
+            key=lambda p: (
+                0 if "client2" in p.name.lower() else (1 if "client" in p.name.lower() else 2),
+                "copy" in p.name.lower(),
+                p.name,
+            ),
+        )
         for f in candidates:
             name = f.name.lower()
             if ("soa" in name or "customer" in name) and not soa_file:
@@ -36,6 +68,23 @@ def find_raw_files() -> Tuple[Optional[Path], Optional[Path]]:
                 mis_file = f
         if soa_file and mis_file:
             break
+
+    # Priority 2: Check subdirectories (e.g. data/raw/Client1/)
+    if not soa_file or not mis_file:
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            for sub in d.glob("*"):
+                if sub.is_dir() and not sub.name.startswith("."):
+                    candidates = sorted(sub.glob("*.csv"), key=lambda p: ("copy" in p.name.lower(), p.name))
+                    for f in candidates:
+                        name = f.name.lower()
+                        if ("soa" in name or "customer" in name) and not soa_file:
+                            soa_file = f
+                        elif ("mis" in name or "collection" in name) and "risk" not in name and "scored" not in name and not mis_file:
+                            mis_file = f
+                    if soa_file and mis_file:
+                        break
 
     return soa_file, mis_file
 
@@ -78,6 +127,19 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
         soa["total_dues"] = pd.to_numeric(soa["emi_pemi_dues"], errors="coerce").fillna(0)
     else:
         soa["total_dues"] = 0.0
+
+    # Retain raw unclipped dues if negative (advance balance indicator), but floor total_dues at 0 for exposure
+    if (soa["total_dues"] < 0).any():
+        soa["total_dues_net"] = soa["total_dues"]
+        soa["total_dues"] = np.maximum(0.0, soa["total_dues"])
+
+    # Standardize bucket label format (remove internal multi-spaces e.g. '3  Above' -> '3+')
+    if "bucket" in soa.columns:
+        soa["bucket"] = soa["bucket"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+        soa["bucket"] = soa["bucket"].replace({
+            "nan": "0", "None": "0", "": "0",
+            "3 Above": "3+", "3 & Above": "3+", "3  Above": "3+"
+        })
 
     # DPD and Bucket Group handling (in Client 2, DPD may not be present, but Bucket is)
     if "dpd" not in soa.columns:
@@ -144,7 +206,7 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
                 lambda d: "0" if d <= 0 else ("1-29" if d < 30 else ("30-59" if d < 60 else ("60-89" if d < 90 else "90+")))
             )
 
-    # Preserve bucket as string so categorical values ('3  Above', '0', etc.) are not destroyed by to_numeric
+    # Preserve bucket as string
     if "bucket" in soa.columns:
         soa["bucket"] = soa["bucket"].astype(str).str.strip().replace({"nan": "0", "None": "0", "": "0"})
 
@@ -170,7 +232,8 @@ def prepare_soa(soa: pd.DataFrame) -> pd.DataFrame:
     if dues_matches_emi.any():
         soa["overdue_dues"] = np.where(dues_matches_emi, np.maximum(0.0, soa["total_dues"] - emi_val), soa["total_dues"])
     else:
-        soa["overdue_dues"] = soa["total_dues"]
+        soa["overdue_dues"] = np.maximum(0.0, soa["total_dues"])
+    soa["overdue_dues"] = np.maximum(0.0, soa["overdue_dues"])
 
     # Dates used for months-on-books (MOB) and the matured-overdue check
     for col in ["disbursal_date", "cycle_date", "emi_due_date"]:
@@ -201,6 +264,11 @@ def prepare_mis(mis: pd.DataFrame) -> pd.DataFrame:
         mis["payment_type"] = ""
     else:
         mis["payment_type"] = mis["payment_type"].astype(str).str.strip().replace({"nan": "", "None": ""})
+
+    if "receipt_status" not in mis.columns:
+        mis["receipt_status"] = ""
+    else:
+        mis["receipt_status"] = mis["receipt_status"].astype(str).str.strip().replace({"nan": "", "None": ""})
 
     # Numeric collections and charges
     amount_cols = [
