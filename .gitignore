@@ -1,12 +1,11 @@
 __pycache__/
+*/__pycache__/
+*/*/__pycache__/
 *.py[cod]
 *$py.class
 .vscode/
 .idea/
 *.log
 .env
-data/raw/**/*.csv
-data/raw/*.csv
-data/processed/**/*.csv
-data/processed/*.csv
-
+*/.env
+*.tmp
