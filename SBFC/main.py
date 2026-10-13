@@ -179,7 +179,7 @@ def main() -> None:
     p_db.set_defaults(func=cmd_sync_db)
 
     p_dbscore = sub.add_parser("db-score", help="Run scoring reading from PostgreSQL, writing results back to it")
-    p_dbscore.add_argument("--out", type=str, default="risk_scored_loans.csv",
+    p_dbscore.add_argument("--out", type=str, default="SBFC_Risk_Scored.csv",
                             help="CSV mirror filename (relative to data/processed) or a full path")
     p_dbscore.set_defaults(func=cmd_db_score)
 

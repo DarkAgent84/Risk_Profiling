@@ -1,7 +1,7 @@
 # Collections Risk Profiling Engine
 
 A calibrated, multi-factor risk scoring engine for loan collections. Rebuilt
-for a flat, predictable structure — one CLI, one config file, four small
+for a flat, predictable structure — one CLI, one config file, a handful of small
 modules.
 
 ## Structure
@@ -23,7 +23,7 @@ risk_profiling/
     └── db.py               # optional PostgreSQL sync (only imported if used)
 ```
 
-That's it — no bridge files, no duplicate config, no dead code paths.
+That's it — no bridge files and no duplicate config.
 
 ## Quick start
 
@@ -102,23 +102,45 @@ rules. An algorithmic 4-class `customer_type` is independently computed by the
 engine and included in the output alongside `soa_customer_type` for audit and
 evaluation. All loans go through the same rule:
 
-1. **Raw score (0–1)** — one uniform bucket/DPD escalation rule applies to
-   every loan (see `src/scoring.py`):
-   - Bucket in `30-59` / `60-89` / `90+` (or an Excel-mangled early-bucket
-     alias), or any positive DPD → escalated: at least 0.70, scaled up
-     further by DPD severity, dues exposure, and behavioral friction.
-   - Bucket `0` (current) but still carrying dues, charges, or receipt
-     activity → 0.70.
-   - Otherwise (current, nothing owed, no activity) → 0.05.
-2. **NPA floor** — any loan at or beyond `config.NPA_DPD_THRESHOLD` days
-   past due is floored at `config.NPA_FLOOR_SCORE`, applied uniformly to
-   every loan (there's no early-vintage exemption any more, since that
-   concept depended on `customer_type == "3 MOB"`).
-3. **Tier** — the *final* score (after the floor) is mapped to
-   High / Medium / Low using `config.TIER_HIGH_CUTOFF` /
-   `config.TIER_MEDIUM_CUTOFF`. This is the only place a tier label is
-   decided — changing a cutoff in `config.py` immediately changes output,
-   with no hardcoded label anywhere else to keep in sync.
+1. **Raw score (0–1)** — one uniform rule for every loan (see `src/scoring.py`),
+   monotonic in severity so a worse bucket never scores below a better one:
+   - Severity base from the worse of the bucket label and DPD
+     (`0` < `1-29` < `30-59` < `60-89` < `90+`), plus small terms for DPD
+     severity, overdue-dues exposure and receipt behaviour (rejections /
+     partial payments).
+   - Current loans carrying overdue dues or charges get a modest
+     `bucket0_overdue_score` (below any delinquent bucket), not a High score.
+   - Bounce-history evidence (collector assigned when it is a minority
+     assignment, and `charges_2` / `charges_3` / `charges_payable` > 0) adds
+     `w_ev` × evidence. The collector flag is ignored when >90% of loans have one.
+   - Duplicate SOA loan numbers are dropped (first kept).
+2. **NPA floor** — DPD >= `NPA_DPD_THRESHOLD` or `matured_overdue` floors the
+   score at `npa_floor`, which is kept above the High cutoff so NPA is always High.
+3. **Tier** — the final score maps to High / Medium / Low via `high_cut` /
+   `med_cut`.
+
+All of these numbers live in `DEFAULTS` in `src/scoring.py` (seeded from
+`config.py`) and are overridden by `calibrated_params.json` when present.
+
+## Calibration (`calibrate.py`)
+
+```
+python calibrate.py                 # search parameters, print held-out report (70/30 split)
+python calibrate.py --apply         # also write calibrated_params.json
+python calibrate.py --allow-npa-downgrade   # let NPA loans fall below High (policy decision)
+```
+
+It maximises agreement (macro-F1 plus a dues-weighted accuracy term) with the
+legacy SOA `Risk Type`. Needs a labelled SOA. SBFC has none, so it ships a
+conservative hand-set parameter file; recalibrate if you get labels/outcomes.
+Caveat: the legacy label tracks bounce history, not DPD, so higher agreement is
+not the same as better default prediction.
+
+## Tests
+
+```
+python tests/test_scoring.py        # or: pytest tests
+```
 
 ## matured_overdue (src/matured.py) — feeds the NPA floor
 
@@ -126,7 +148,8 @@ Reverse-engineered from the original `Customer Type = "Matured"` tag, but
 computed from loan-tenure math (not a behavioral/outcome proxy, so it's safe
 to use as a scoring input — unlike `customer_type` itself, which was found
 to be leakage): `Emi due date < Cycle Date` (tenure has contractually
-lapsed) **and** the loan is still carrying DPD or dues.
+lapsed) **and** the loan is still carrying DPD or overdue arrears
+(`overdue_dues`, not gross `total_dues`).
 
 It floors `risk_score` to `config.NPA_FLOOR_SCORE`, the same floor used for
 DPD>=90 loans. Most matured-overdue loans already hit that floor via DPD

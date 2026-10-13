@@ -141,10 +141,16 @@ def evaluate_against_soa(soa_input, scored_input) -> None:
         valid = df[df[risk_col].notna()].copy()
         match_count = int((valid["risk_tier"] == valid[risk_col]).sum())
         acc_valid = (valid["risk_tier"] == valid[risk_col]).mean() if len(valid) else 0.0
-        acc_total = (df["risk_tier"] == df[risk_col].fillna("Low")).mean()
         print(f"[*] Exact match count        : {match_count:,} / {len(valid):,}")
         print(f"[*] Accuracy on valid tiers   : {acc_valid * 100:.2f}%")
-        print(f"[*] Accuracy on full dataset  : {acc_total * 100:.2f}%")
+        print(f"[*] Loans without a usable SOA label (excluded, not counted as Low): {len(df) - len(valid):,}")
+        tiers = ["High", "Medium", "Low"]
+        vt = valid[valid[risk_col].isin(tiers)]
+        print(f"[*] Per-tier precision / recall (vs SOA label):")
+        for t in tiers:
+            tp = int(((vt["risk_tier"] == t) & (vt[risk_col] == t)).sum())
+            pp = int((vt["risk_tier"] == t).sum()); ap = int((vt[risk_col] == t).sum())
+            print(f"      {t:<7} precision {tp / pp * 100 if pp else 0:5.1f}%   recall {tp / ap * 100 if ap else 0:5.1f}%")
 
     if cust_col and cust_col in df.columns:
         print("\n" + "=" * 75)

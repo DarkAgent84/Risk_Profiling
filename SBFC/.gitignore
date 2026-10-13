@@ -1,7 +1,20 @@
 __pycache__/
 *.py[cod]
-*$py.class
 .vscode/
 .idea/
 *.log
 .env
+.env*
+!.env.example
+*.tmp
+.venv/
+venv/
+
+
+# Customer / collection data: never commit (contains PII)
+**/data/raw/*
+**/data/processed/*
+!**/data/**/.gitkeep
+*_dump.sql
+!load_tables.sql
+*.xlsx
